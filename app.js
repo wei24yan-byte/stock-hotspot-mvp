@@ -311,37 +311,19 @@ async function saveSupabaseState(nextState, forceStatus = false) {
   if (!config) return false;
   try {
     const normalized = normalizeState(nextState);
-    let response = await fetch(`${config.url}/rest/v1/app_state?id=eq.${encodeURIComponent(SUPABASE_STATE_ROW_ID)}`, {
-      method: "PATCH",
-      headers: {
-        ...supabaseHeaders(config),
-        "Content-Type": "application/json",
-        Prefer: "return=representation"
-      },
-      body: JSON.stringify({ data: normalized })
-    });
-    if (response.ok) {
-      const rows = await response.json().catch(() => []);
-      if (!rows.length) {
-        response = await fetch(`${config.url}/rest/v1/app_state`, {
-          method: "POST",
-          headers: {
-            ...supabaseHeaders(config),
-            "Content-Type": "application/json",
-            Prefer: "return=representation"
-          },
-          body: JSON.stringify({ id: SUPABASE_STATE_ROW_ID, data: normalized })
-        });
-      }
-    }
-    if (!response.ok) throw new Error(await supabaseErrorMessage(response, "写入失败"));
-    const rows = await response.json().catch(() => []);
-    if (rows?.[0]?.data && !statesEqual(normalizeState(rows[0].data), normalized)) {
-      throw new Error("写入后返回数据不一致");
-    }
+    await writeSupabaseRow(config, normalized);
     const verifiedState = await loadSupabaseState(true, false);
     if (!verifiedState) throw new Error(lastSupabaseError || "写入后无法读回云端数据");
-    if (!statesEqual(verifiedState, normalized)) throw new Error("写入后云端回读不一致");
+    if (!statesEqual(verifiedState, normalized)) {
+      const merged = mergeStates(normalized, verifiedState);
+      await writeSupabaseRow(config, merged);
+      const mergedVerifiedState = await loadSupabaseState(true, false);
+      if (!mergedVerifiedState) throw new Error(lastSupabaseError || "合并后无法读回云端数据");
+      if (!statesEqual(mergedVerifiedState, merged)) throw new Error("合并写入后云端回读不一致");
+      state = merged;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      render();
+    }
     if (forceStatus) updateSupabaseStatus("已同步");
     lastSupabaseError = "";
     return true;
@@ -351,6 +333,36 @@ async function saveSupabaseState(nextState, forceStatus = false) {
     if (forceStatus) updateSupabaseStatus("同步失败");
     return false;
   }
+}
+
+async function writeSupabaseRow(config, normalized) {
+  let response = await fetch(`${config.url}/rest/v1/app_state?id=eq.${encodeURIComponent(SUPABASE_STATE_ROW_ID)}`, {
+    method: "PATCH",
+    headers: {
+      ...supabaseHeaders(config),
+      "Content-Type": "application/json",
+      Prefer: "return=representation"
+    },
+    body: JSON.stringify({ data: normalized })
+  });
+  if (response.ok) {
+    const rows = await response.json().catch(() => []);
+    if (!rows.length) {
+      response = await fetch(`${config.url}/rest/v1/app_state`, {
+        method: "POST",
+        headers: {
+          ...supabaseHeaders(config),
+          "Content-Type": "application/json",
+          Prefer: "return=representation"
+        },
+        body: JSON.stringify({ id: SUPABASE_STATE_ROW_ID, data: normalized })
+      });
+    } else if (rows[0]?.data && !statesEqual(normalizeState(rows[0].data), normalized)) {
+      throw new Error("写入后返回数据不一致");
+    }
+  }
+  if (!response.ok) throw new Error(await supabaseErrorMessage(response, "写入失败"));
+  return true;
 }
 
 function supabaseHeaders(config) {

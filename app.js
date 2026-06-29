@@ -513,7 +513,63 @@ function dedupeBy(items, keyFn) {
 }
 
 function statesEqual(a, b) {
-  return stableStringify(normalizeState(a)) === stableStringify(normalizeState(b));
+  return stableStringify(canonicalState(a)) === stableStringify(canonicalState(b));
+}
+
+function canonicalState(value) {
+  const data = normalizeState(value);
+  const stockKey = (stock) => `${stock.market || ""}-${stock.code || ""}`;
+  const stockById = new Map(data.stocks.map((stock) => [stock.id, stockKey(stock)]));
+
+  return {
+    stocks: [...data.stocks]
+      .map((stock) => ({
+        key: stockKey(stock),
+        code: stock.code,
+        market: stock.market,
+        name: stock.name,
+        addedAt: stock.addedAt,
+        active: stock.active !== false,
+        concepts: normalizeConceptList(stock.concepts).sort((a, b) => a.localeCompare(b))
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
+    prices: [...data.prices]
+      .map((price) => ({
+        key: `${stockById.get(price.stockId) || price.stockId}-${price.date}`,
+        stock: stockById.get(price.stockId) || price.stockId,
+        date: price.date,
+        close: Number(price.close),
+        changePct: Number(price.changePct)
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
+    news: [...data.news]
+      .map((item) => ({
+        key: `${stockById.get(item.stockId) || item.stockId}-${item.date}-${item.title}`,
+        stock: stockById.get(item.stockId) || item.stockId,
+        date: item.date,
+        title: item.title,
+        source: item.source || "",
+        url: item.url || "",
+        summary: item.summary || ""
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
+    reports: [...data.reports]
+      .map((item) => ({
+        key: item.id || `${item.type}-${item.date}`,
+        type: item.type || "",
+        date: item.date || "",
+        content: item.content || ""
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
+    deletedStocks: [...(data.deletedStocks || [])]
+      .map((item) => ({
+        key: `${item.id || ""}|${item.market || ""}|${item.code || ""}`,
+        id: item.id || "",
+        code: item.code || "",
+        market: item.market || ""
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key))
+  };
 }
 
 function stableStringify(value) {

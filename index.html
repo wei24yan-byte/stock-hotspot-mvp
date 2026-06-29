@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f7f8fa" />
+    <title>热点股票台账</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="stylesheet" href="./styles.css?v=9" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">免费自用版</p>
+          <h1>热点股票台账</h1>
+        </div>
+        <div class="topbar-actions">
+          <span class="status-pill" id="todayLabel"></span>
+          <button class="icon-button" id="refreshBtn" title="生成今日数据" aria-label="生成今日数据">↻</button>
+        </div>
+      </header>
+
+      <section class="quick-add" aria-label="添加股票">
+        <label>
+          <span>代码</span>
+          <input id="stockCode" inputmode="latin" autocomplete="off" placeholder="600519" />
+        </label>
+        <label>
+          <span>名称</span>
+          <input id="stockName" autocomplete="off" placeholder="贵州茅台" />
+        </label>
+        <div class="market-preview">
+          <span>市场</span>
+          <strong id="marketPreview">输入代码后识别</strong>
+        </div>
+        <label>
+          <span>概念</span>
+          <input id="stockConcepts" autocomplete="off" placeholder="AI算力、机器人" />
+        </label>
+        <button id="addStockBtn" class="primary-button">＋ 添加</button>
+      </section>
+
+      <nav class="tabs" aria-label="视图">
+        <button class="tab active" data-view="dashboard">总览</button>
+        <button class="tab" data-view="stocks">股票</button>
+        <button class="tab" data-view="reports">报告</button>
+        <button class="tab" data-view="settings">数据</button>
+      </nav>
+
+      <main>
+        <section id="dashboardView" class="view active">
+          <div class="metric-grid">
+            <article class="metric-card">
+              <span>关注股票</span>
+              <strong id="metricStocks">0</strong>
+            </article>
+            <article class="metric-card">
+              <span>今日均涨幅</span>
+              <strong id="metricDaily">-</strong>
+            </article>
+            <article class="metric-card">
+              <span>最热概念</span>
+              <strong id="metricConcept">-</strong>
+            </article>
+            <article class="metric-card">
+              <span>新闻条目</span>
+              <strong id="metricNews">0</strong>
+            </article>
+          </div>
+
+          <div class="dashboard-grid">
+            <section class="panel wide-panel">
+              <div class="panel-head">
+                <h2>股票池</h2>
+                <button class="ghost-button" id="sampleBtn">载入样例</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>股票</th>
+                      <th>添加日</th>
+                      <th>最新价</th>
+                      <th>添加以来</th>
+                      <th>今日</th>
+                      <th>周</th>
+                      <th>月</th>
+                      <th>概念</th>
+                    </tr>
+                  </thead>
+                  <tbody id="stockTableBody"></tbody>
+                </table>
+              </div>
+              <div class="empty-state" id="stockEmpty">暂无股票</div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2>手动概念聚合</h2>
+              </div>
+              <div id="conceptList" class="concept-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2>最新新闻</h2>
+              </div>
+              <div id="newsList" class="news-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="stocksView" class="view">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>手动记录收盘</h2>
+              </div>
+              <form id="priceForm" class="record-form">
+                <label>
+                  <span>股票</span>
+                  <select id="priceStock"></select>
+                </label>
+                <label>
+                  <span>日期</span>
+                  <input id="priceDate" type="date" />
+                </label>
+                <label>
+                  <span>收盘价</span>
+                  <input id="priceClose" type="number" step="0.01" min="0" placeholder="12.34" />
+                </label>
+                <label>
+                  <span>涨跌幅%</span>
+                  <input id="priceChange" type="number" step="0.01" placeholder="3.21" />
+                </label>
+                <button class="primary-button" type="submit">保存记录</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2>个股明细</h2>
+              </div>
+              <div id="stockCards" class="stock-card-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="reportsView" class="view">
+          <div class="report-toolbar">
+            <button class="primary-button" id="buildReportsBtn">生成报告</button>
+            <button class="ghost-button" id="copyReportBtn">复制最新报告</button>
+          </div>
+          <div id="reportList" class="report-list"></div>
+        </section>
+
+        <section id="settingsView" class="view">
+          <div class="split-grid">
+            <section class="panel wide-panel">
+              <div class="panel-head">
+                <h2>云端同步</h2>
+                <span class="status-pill" id="supabaseStatus">未连接</span>
+              </div>
+              <div class="cloud-sync-form">
+                <label>
+                  <span>Supabase Project URL</span>
+                  <input id="supabaseUrl" autocomplete="off" placeholder="https://xxxx.supabase.co" />
+                </label>
+                <label>
+                  <span>Anon Key</span>
+                  <input id="supabaseAnonKey" autocomplete="off" placeholder="eyJhbGciOi..." />
+                </label>
+                <div class="button-row">
+                  <button class="primary-button" id="saveSupabaseBtn">保存并上传</button>
+                  <button class="ghost-button" id="pullSupabaseBtn">从云端读取</button>
+                </div>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-head">
+                <h2>数据备份</h2>
+              </div>
+              <div class="button-row">
+                <button class="primary-button" id="exportBtn">导出 JSON</button>
+                <label class="file-button">
+                  导入 JSON
+                  <input id="importFile" type="file" accept="application/json" />
+                </label>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-head">
+                <h2>维护</h2>
+              </div>
+              <div class="button-row">
+                <button class="ghost-button" id="rebuildBtn">同步概念</button>
+                <button class="danger-button" id="clearBtn">清空数据</button>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js?v=9"></script>
+  </body>
+</html>

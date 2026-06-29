@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f7f8fa" />
     <title>热点股票台账</title>
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./styles.css?v=9" />
+    <link rel="stylesheet" href="./styles.css?v=10" />
   </head>
   <body>
     <div class="app-shell">
@@ -17,7 +17,7 @@
         </div>
         <div class="topbar-actions">
           <span class="status-pill" id="todayLabel"></span>
-          <button class="icon-button" id="refreshBtn" title="生成今日数据" aria-label="生成今日数据">↻</button>
+          <button class="icon-button" id="refreshBtn" title="更新真实行情" aria-label="更新真实行情">↻</button>
         </div>
       </header>
 
@@ -27,8 +27,8 @@
           <input id="stockCode" inputmode="latin" autocomplete="off" placeholder="600519" />
         </label>
         <label>
-          <span>名称</span>
-          <input id="stockName" autocomplete="off" placeholder="贵州茅台" />
+          <span>名称（自动）</span>
+          <input id="stockName" autocomplete="off" placeholder="输入代码后自动显示" />
         </label>
         <div class="market-preview">
           <span>市场</span>
@@ -204,6 +204,6 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=9"></script>
+    <script src="./app.js?v=10"></script>
   </body>
 </html>

@@ -620,7 +620,9 @@ td:nth-child(8) {
 
   tbody tr {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 9px;
+    width: 100%;
     margin-bottom: 10px;
     padding: 12px;
     border: 1px solid var(--line);
@@ -633,22 +635,25 @@ td:nth-child(8) {
   }
 
   tbody td {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(72px, 28%) minmax(0, 1fr);
+    width: 100% !important;
     align-items: flex-start;
-    justify-content: space-between;
-    gap: 14px;
+    gap: 12px;
     border-bottom: 0;
     padding: 0;
-    text-align: right;
+    text-align: left;
+    word-break: normal;
+    overflow-wrap: normal;
   }
 
   tbody td::before {
     content: attr(data-label);
-    flex: 0 0 76px;
     color: var(--muted);
     font-size: 12px;
     font-weight: 650;
     text-align: left;
+    white-space: nowrap;
   }
 
   tbody td[data-label="股票"] {
@@ -662,12 +667,33 @@ td:nth-child(8) {
 
   tbody td[data-label="概念"] {
     display: grid;
-    grid-template-columns: 76px 1fr;
+    grid-template-columns: minmax(72px, 28%) minmax(0, 1fr);
     text-align: left;
   }
 
   tbody td[data-label="概念"] .tag-row {
-    justify-content: flex-end;
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  tbody td[data-label="添加日"],
+  tbody td[data-label="最新价"],
+  tbody td[data-label="添加以来"],
+  tbody td[data-label="今日"],
+  tbody td[data-label="周"],
+  tbody td[data-label="月"] {
+    white-space: nowrap;
+  }
+
+  tbody td[data-label="添加日"] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stock-title strong,
+  .stock-title span,
+  .tag {
+    word-break: keep-all;
+    overflow-wrap: normal;
   }
 }
 

@@ -3,6 +3,8 @@ const SUPABASE_CONFIG_KEY = "stock-hotspot-supabase-config-v1";
 const SUPABASE_STATE_ROW_ID = "default";
 const API_STATE_URL = "./api/state";
 const STATIC_STATE_URL = "./data/state.json";
+const AUTO_SYNC_DELAY_MS = 1000;
+const AUTO_SYNC_RETRY_MS = 12000;
 
 const newsTemplates = [
   "{name}盘中活跃，市场关注{concept}方向催化",
@@ -23,6 +25,9 @@ let state = emptyState();
 let apiAvailable = false;
 let stockLookupTimer = 0;
 let stockLookupRequestId = 0;
+let autoSyncTimer = 0;
+let autoSyncInFlight = false;
+let autoSyncPending = false;
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindElements();
@@ -97,15 +102,25 @@ function bindEvents() {
 }
 
 function emptyState() {
-  return { stocks: [], prices: [], news: [], concepts: [], reports: [] };
+  return { stocks: [], prices: [], news: [], concepts: [], reports: [], deletedStocks: [] };
 }
 
 async function loadState() {
   const fallback = emptyState();
   loadSupabaseForm();
+  const localState = loadLocalState();
 
   const cloudState = await loadSupabaseState();
-  if (cloudState) return cloudState;
+  if (cloudState && localState) {
+    const merged = mergeStates(localState, cloudState);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+    if (!statesEqual(merged, cloudState)) setTimeout(() => queueSupabaseSync(300), 0);
+    return merged;
+  }
+  if (cloudState) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudState));
+    return cloudState;
+  }
 
   try {
     const response = await fetch(API_STATE_URL, { cache: "no-store" });
@@ -126,17 +141,23 @@ async function loadState() {
     // Static hosting may not have a seeded data file yet.
   }
 
+  if (localState) return localState;
+  return fallback;
+}
+
+function loadLocalState() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? normalizeState(JSON.parse(saved)) : fallback;
+    return saved ? normalizeState(JSON.parse(saved)) : null;
   } catch {
-    return fallback;
+    return null;
   }
 }
 
 function saveState() {
+  state = normalizeState(state);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  saveSupabaseState(state);
+  queueSupabaseSync();
   if (!apiAvailable) return;
   fetch(API_STATE_URL, {
     method: "POST",
@@ -146,6 +167,55 @@ function saveState() {
     apiAvailable = false;
     showToast("已切回本机存储");
   });
+}
+
+function queueSupabaseSync(delay = AUTO_SYNC_DELAY_MS) {
+  if (!getSupabaseConfig()) {
+    updateSupabaseStatus("未连接");
+    return;
+  }
+  autoSyncPending = true;
+  updateSupabaseStatus("待自动上传");
+  clearTimeout(autoSyncTimer);
+  autoSyncTimer = setTimeout(runQueuedSupabaseSync, delay);
+}
+
+async function runQueuedSupabaseSync() {
+  if (!getSupabaseConfig()) {
+    autoSyncPending = false;
+    updateSupabaseStatus("未连接");
+    return;
+  }
+
+  if (autoSyncInFlight) {
+    autoSyncPending = true;
+    clearTimeout(autoSyncTimer);
+    autoSyncTimer = setTimeout(runQueuedSupabaseSync, AUTO_SYNC_DELAY_MS);
+    return;
+  }
+
+  autoSyncInFlight = true;
+  autoSyncPending = false;
+  updateSupabaseStatus("自动上传中");
+
+  const snapshot = JSON.parse(JSON.stringify(normalizeState(state)));
+  const ok = await saveSupabaseState(snapshot);
+  autoSyncInFlight = false;
+
+  if (autoSyncPending) {
+    clearTimeout(autoSyncTimer);
+    autoSyncTimer = setTimeout(runQueuedSupabaseSync, AUTO_SYNC_DELAY_MS);
+    return;
+  }
+
+  if (ok) {
+    updateSupabaseStatus(`已自动上传 ${formatClock(new Date())} · ${stateSummary(state)}`);
+  } else {
+    autoSyncPending = true;
+    updateSupabaseStatus("自动上传失败，稍后重试");
+    clearTimeout(autoSyncTimer);
+    autoSyncTimer = setTimeout(runQueuedSupabaseSync, AUTO_SYNC_RETRY_MS);
+  }
 }
 
 function getSupabaseConfig() {
@@ -180,8 +250,15 @@ async function saveSupabaseConfig() {
   localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify({ url, anonKey }));
   updateSupabaseStatus("上传中");
   const ok = await saveSupabaseState(state, true);
-  updateSupabaseStatus(ok ? "已同步" : "同步失败");
-  showToast(ok ? "云端同步已开启" : "云端连接失败");
+  if (ok) {
+    const cloudState = await loadSupabaseState(true, false);
+    const verified = cloudState && statesEqual(normalizeState(state), cloudState);
+    updateSupabaseStatus(verified ? `已同步并验证：${stateSummary(state)}` : "同步失败：云端回读不一致");
+    showToast(verified ? "云端同步已开启" : "上传后云端校验失败");
+  } else {
+    updateSupabaseStatus("同步失败");
+    showToast("云端连接失败");
+  }
 }
 
 async function pullSupabaseState() {
@@ -192,14 +269,16 @@ async function pullSupabaseState() {
     showToast("云端暂无数据或连接失败");
     return;
   }
-  state = cloudState;
+  const localState = loadLocalState();
+  state = localState ? mergeStates(localState, cloudState) : cloudState;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
-  updateSupabaseStatus("已同步");
-  showToast("已从云端读取");
+  if (!statesEqual(state, cloudState)) queueSupabaseSync(300);
+  updateSupabaseStatus("已合并同步");
+  showToast("已从云端读取并合并");
 }
 
-async function loadSupabaseState(showErrors = false) {
+async function loadSupabaseState(showErrors = false, updateStatus = true) {
   const config = getSupabaseConfig();
   if (!config) return null;
   try {
@@ -209,11 +288,11 @@ async function loadSupabaseState(showErrors = false) {
     const rows = await response.json();
     const data = rows?.[0]?.data;
     if (!data) return null;
-    updateSupabaseStatus("已同步");
+    if (updateStatus) updateSupabaseStatus("已同步");
     return normalizeState(data);
   } catch (error) {
     if (showErrors) console.warn(error);
-    updateSupabaseStatus("云端不可用");
+    if (updateStatus) updateSupabaseStatus("云端不可用");
     return null;
   }
 }
@@ -222,16 +301,21 @@ async function saveSupabaseState(nextState, forceStatus = false) {
   const config = getSupabaseConfig();
   if (!config) return false;
   try {
+    const normalized = normalizeState(nextState);
     const response = await fetch(`${config.url}/rest/v1/app_state?on_conflict=id`, {
       method: "POST",
       headers: {
         ...supabaseHeaders(config),
         "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates,return=minimal"
+        Prefer: "resolution=merge-duplicates,return=representation"
       },
-      body: JSON.stringify([{ id: SUPABASE_STATE_ROW_ID, data: normalizeState(nextState) }])
+      body: JSON.stringify([{ id: SUPABASE_STATE_ROW_ID, data: normalized }])
     });
     if (!response.ok) throw new Error(`Supabase write failed: ${response.status}`);
+    await response.json().catch(() => []);
+    const verifiedState = await loadSupabaseState(true, false);
+    if (!verifiedState) throw new Error("Supabase write verification read failed");
+    if (!statesEqual(verifiedState, normalized)) throw new Error("Supabase write verification mismatch");
     if (forceStatus) updateSupabaseStatus("已同步");
     return true;
   } catch (error) {
@@ -250,15 +334,18 @@ function supabaseHeaders(config) {
 
 function normalizeState(value) {
   const legacyConcepts = Array.isArray(value?.concepts) ? value.concepts : [];
-  return {
+  const deletedStocks = Array.isArray(value?.deletedStocks) ? value.deletedStocks : [];
+  const normalized = {
     stocks: Array.isArray(value?.stocks)
       ? value.stocks.map((stock) => normalizeStock(stock, legacyConcepts))
       : [],
     prices: Array.isArray(value?.prices) ? value.prices : [],
     news: Array.isArray(value?.news) ? value.news : [],
     concepts: legacyConcepts,
-    reports: Array.isArray(value?.reports) ? value.reports : []
+    reports: Array.isArray(value?.reports) ? value.reports : [],
+    deletedStocks: deletedStocks.map(normalizeDeletedStock).filter((item) => item.id || item.code)
   };
+  return applyDeletedStocks(normalized);
 }
 
 function normalizeStock(stock, legacyConcepts = []) {
@@ -279,6 +366,109 @@ function normalizeStock(stock, legacyConcepts = []) {
     active: stock?.active !== false,
     concepts
   };
+}
+
+function normalizeDeletedStock(item) {
+  return {
+    id: String(item?.id || ""),
+    code: cleanCode(item?.code || ""),
+    market: item?.market || inferMarket(item?.code || ""),
+    deletedAt: item?.deletedAt || formatDate(new Date())
+  };
+}
+
+function mergeStates(primary, secondary) {
+  const base = normalizeState(primary);
+  const incoming = normalizeState(secondary);
+  const deletedStocks = dedupeBy(
+    [...base.deletedStocks, ...incoming.deletedStocks],
+    (item) => `${item.id || ""}|${item.market || ""}|${item.code || ""}`
+  );
+  const deletedKeys = new Set(deletedStocks.flatMap((item) => stockDeleteKeys(item)));
+  const idMap = new Map();
+  const stocks = [];
+
+  [...base.stocks, ...incoming.stocks].forEach((stock) => {
+    const key = `${stock.market}-${stock.code}`;
+    if (deletedKeys.has(stock.id) || deletedKeys.has(key)) return;
+    const existing = stocks.find((item) => item.market === stock.market && item.code === stock.code);
+    if (!existing) {
+      stocks.push({ ...stock, concepts: normalizeConceptList(stock.concepts) });
+      return;
+    }
+    idMap.set(stock.id, existing.id);
+    existing.name = existing.name || stock.name;
+    existing.addedAt = existing.addedAt <= stock.addedAt ? existing.addedAt : stock.addedAt;
+    existing.active = existing.active !== false && stock.active !== false;
+    existing.concepts = normalizeConceptList([...(existing.concepts || []), ...(stock.concepts || [])]);
+  });
+
+  const prices = dedupeBy(
+    [...base.prices, ...incoming.prices].map((price) => remapStockRef(price, idMap)),
+    (price) => `${price.stockId}-${price.date}`
+  );
+  const news = dedupeBy(
+    [...base.news, ...incoming.news].map((item) => remapStockRef(item, idMap)),
+    (item) => `${item.stockId}-${item.date}-${item.title}`
+  );
+  const reports = dedupeBy([...base.reports, ...incoming.reports], (item) => item.id || `${item.type}-${item.date}`);
+  const merged = { stocks, prices, news, concepts: [], reports, deletedStocks };
+  syncConceptSnapshotForState(merged);
+  return applyDeletedStocks(merged);
+}
+
+function remapStockRef(item, idMap) {
+  const next = { ...item };
+  if (idMap.has(next.stockId)) next.stockId = idMap.get(next.stockId);
+  return next;
+}
+
+function applyDeletedStocks(nextState) {
+  const deletedKeys = new Set((nextState.deletedStocks || []).flatMap((item) => stockDeleteKeys(item)));
+  const stocks = (nextState.stocks || []).filter((stock) => {
+    const key = `${stock.market}-${stock.code}`;
+    return !deletedKeys.has(stock.id) && !deletedKeys.has(key);
+  });
+  const stockIds = new Set(stocks.map((stock) => stock.id));
+  return {
+    ...nextState,
+    stocks,
+    prices: (nextState.prices || []).filter((price) => stockIds.has(price.stockId)),
+    news: (nextState.news || []).filter((item) => stockIds.has(item.stockId)),
+    concepts: (nextState.concepts || []).filter((item) => stockIds.has(item.stockId))
+  };
+}
+
+function stockDeleteKeys(item) {
+  const keys = [];
+  if (item?.id) keys.push(item.id);
+  if (item?.code && item?.market) keys.push(`${item.market}-${item.code}`);
+  return keys;
+}
+
+function dedupeBy(items, keyFn) {
+  const map = new Map();
+  items.filter(Boolean).forEach((item) => {
+    const key = keyFn(item);
+    if (!key || map.has(key)) return;
+    map.set(key, item);
+  });
+  return [...map.values()];
+}
+
+function statesEqual(a, b) {
+  return stableStringify(normalizeState(a)) === stableStringify(normalizeState(b));
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function setDefaultDates() {
@@ -474,9 +664,13 @@ function rebuildConcepts(showMessage = true) {
 }
 
 function syncConceptSnapshot() {
+  syncConceptSnapshotForState(state);
+}
+
+function syncConceptSnapshotForState(nextState) {
   const today = formatDate(new Date());
-  state.concepts = state.stocks.flatMap((stock) =>
-    conceptsForStock(stock.id).map((tag, index) => ({
+  nextState.concepts = nextState.stocks.flatMap((stock) =>
+    normalizeConceptList(stock.concepts).map((tag, index) => ({
       id: `${stock.id}-${tag}`,
       stockId: stock.id,
       date: today,
@@ -723,6 +917,21 @@ function renderStockCards() {
 }
 
 function deleteStock(stockId) {
+  const stock = state.stocks.find((item) => item.id === stockId);
+  if (stock) {
+    state.deletedStocks = dedupeBy(
+      [
+        ...(state.deletedStocks || []),
+        {
+          id: stock.id,
+          code: stock.code,
+          market: stock.market,
+          deletedAt: formatDate(new Date())
+        }
+      ],
+      (item) => `${item.id || ""}|${item.market || ""}|${item.code || ""}`
+    );
+  }
   state.stocks = state.stocks.filter((stock) => stock.id !== stockId);
   state.prices = state.prices.filter((price) => price.stockId !== stockId);
   state.news = state.news.filter((news) => news.stockId !== stockId);
@@ -1042,6 +1251,15 @@ function parseQuoteDate(value) {
   const text = String(value || "");
   if (!/^\d{8}/.test(text)) return "";
   return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+}
+
+function formatClock(date) {
+  return date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
+}
+
+function stateSummary(value) {
+  const data = normalizeState(value);
+  return `股票${data.stocks.length} 行情${data.prices.length} 新闻${data.news.length}`;
 }
 
 function formatDate(date) {

@@ -1,4 +1,4 @@
-const CACHE_NAME = "stock-hotspot-mvp-v9";
+const CACHE_NAME = "stock-hotspot-mvp-v10";
 const ASSETS = [
   "./",
   "./index.html",

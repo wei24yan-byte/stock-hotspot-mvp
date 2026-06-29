@@ -1,0 +1,9 @@
+{
+  "name": "热点股票台账",
+  "short_name": "股票台账",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#f7f8fa",
+  "icons": []
+}

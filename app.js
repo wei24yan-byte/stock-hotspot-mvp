@@ -302,17 +302,34 @@ async function saveSupabaseState(nextState, forceStatus = false) {
   if (!config) return false;
   try {
     const normalized = normalizeState(nextState);
-    const response = await fetch(`${config.url}/rest/v1/app_state?on_conflict=id`, {
-      method: "POST",
+    let response = await fetch(`${config.url}/rest/v1/app_state?id=eq.${encodeURIComponent(SUPABASE_STATE_ROW_ID)}`, {
+      method: "PATCH",
       headers: {
         ...supabaseHeaders(config),
         "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates,return=representation"
+        Prefer: "return=representation"
       },
-      body: JSON.stringify([{ id: SUPABASE_STATE_ROW_ID, data: normalized }])
+      body: JSON.stringify({ data: normalized })
     });
+    if (response.ok) {
+      const rows = await response.json().catch(() => []);
+      if (!rows.length) {
+        response = await fetch(`${config.url}/rest/v1/app_state`, {
+          method: "POST",
+          headers: {
+            ...supabaseHeaders(config),
+            "Content-Type": "application/json",
+            Prefer: "return=representation"
+          },
+          body: JSON.stringify({ id: SUPABASE_STATE_ROW_ID, data: normalized })
+        });
+      }
+    }
     if (!response.ok) throw new Error(`Supabase write failed: ${response.status}`);
-    await response.json().catch(() => []);
+    const rows = await response.json().catch(() => []);
+    if (rows?.[0]?.data && !statesEqual(normalizeState(rows[0].data), normalized)) {
+      throw new Error("Supabase write response mismatch");
+    }
     const verifiedState = await loadSupabaseState(true, false);
     if (!verifiedState) throw new Error("Supabase write verification read failed");
     if (!statesEqual(verifiedState, normalized)) throw new Error("Supabase write verification mismatch");

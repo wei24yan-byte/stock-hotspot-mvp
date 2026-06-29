@@ -28,6 +28,7 @@ let stockLookupRequestId = 0;
 let autoSyncTimer = 0;
 let autoSyncInFlight = false;
 let autoSyncPending = false;
+let lastSupabaseError = "";
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindElements();
@@ -248,6 +249,7 @@ async function saveSupabaseConfig() {
     return;
   }
   localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify({ url, anonKey }));
+  lastSupabaseError = "";
   updateSupabaseStatus("上传中");
   const ok = await saveSupabaseState(state, true);
   if (ok) {
@@ -256,17 +258,18 @@ async function saveSupabaseConfig() {
     updateSupabaseStatus(verified ? `已同步并验证：${stateSummary(state)}` : "同步失败：云端回读不一致");
     showToast(verified ? "云端同步已开启" : "上传后云端校验失败");
   } else {
-    updateSupabaseStatus("同步失败");
-    showToast("云端连接失败");
+    updateSupabaseStatus(`同步失败：${lastSupabaseError || "连接失败"}`);
+    showToast(lastSupabaseError || "云端连接失败");
   }
 }
 
 async function pullSupabaseState() {
+  lastSupabaseError = "";
   updateSupabaseStatus("读取中");
   const cloudState = await loadSupabaseState(true);
   if (!cloudState) {
-    updateSupabaseStatus("读取失败");
-    showToast("云端暂无数据或连接失败");
+    updateSupabaseStatus(`读取失败：${lastSupabaseError || "云端暂无数据"}`);
+    showToast(lastSupabaseError || "云端暂无数据或连接失败");
     return;
   }
   const localState = loadLocalState();
@@ -284,14 +287,20 @@ async function loadSupabaseState(showErrors = false, updateStatus = true) {
   try {
     const url = `${config.url}/rest/v1/app_state?id=eq.${encodeURIComponent(SUPABASE_STATE_ROW_ID)}&select=data`;
     const response = await fetch(url, { headers: supabaseHeaders(config), cache: "no-store" });
-    if (!response.ok) throw new Error(`Supabase read failed: ${response.status}`);
+    if (!response.ok) throw new Error(await supabaseErrorMessage(response, "读取失败"));
     const rows = await response.json();
     const data = rows?.[0]?.data;
-    if (!data) return null;
+    if (!data) {
+      const created = await saveSupabaseState(emptyState());
+      if (!created) return null;
+      return emptyState();
+    }
     if (updateStatus) updateSupabaseStatus("已同步");
+    lastSupabaseError = "";
     return normalizeState(data);
   } catch (error) {
     if (showErrors) console.warn(error);
+    lastSupabaseError = friendlySupabaseError(error);
     if (updateStatus) updateSupabaseStatus("云端不可用");
     return null;
   }
@@ -325,18 +334,20 @@ async function saveSupabaseState(nextState, forceStatus = false) {
         });
       }
     }
-    if (!response.ok) throw new Error(`Supabase write failed: ${response.status}`);
+    if (!response.ok) throw new Error(await supabaseErrorMessage(response, "写入失败"));
     const rows = await response.json().catch(() => []);
     if (rows?.[0]?.data && !statesEqual(normalizeState(rows[0].data), normalized)) {
-      throw new Error("Supabase write response mismatch");
+      throw new Error("写入后返回数据不一致");
     }
     const verifiedState = await loadSupabaseState(true, false);
-    if (!verifiedState) throw new Error("Supabase write verification read failed");
-    if (!statesEqual(verifiedState, normalized)) throw new Error("Supabase write verification mismatch");
+    if (!verifiedState) throw new Error(lastSupabaseError || "写入后无法读回云端数据");
+    if (!statesEqual(verifiedState, normalized)) throw new Error("写入后云端回读不一致");
     if (forceStatus) updateSupabaseStatus("已同步");
+    lastSupabaseError = "";
     return true;
   } catch (error) {
     console.warn(error);
+    lastSupabaseError = friendlySupabaseError(error);
     if (forceStatus) updateSupabaseStatus("同步失败");
     return false;
   }
@@ -345,8 +356,24 @@ async function saveSupabaseState(nextState, forceStatus = false) {
 function supabaseHeaders(config) {
   return {
     apikey: config.anonKey,
-    Authorization: `Bearer ${config.anonKey}`
+    Authorization: `Bearer ${config.anonKey}`,
+    Accept: "application/json"
   };
+}
+
+async function supabaseErrorMessage(response, action) {
+  const text = await response.text().catch(() => "");
+  const detail = text.slice(0, 180).replace(/\s+/g, " ").trim();
+  return `${action} ${response.status}${detail ? `：${detail}` : ""}`;
+}
+
+function friendlySupabaseError(error) {
+  const message = String(error?.message || error || "连接失败");
+  if (message.includes("401") || message.includes("403")) return "Key 或权限不对，请检查 anon key 和 RLS 策略";
+  if (message.includes("404") || message.includes("app_state")) return "找不到 app_state 表，请重新运行 Supabase SQL";
+  if (message.includes("Failed to fetch")) return "网络或 Supabase URL 不通";
+  if (message.includes("JWT")) return "anon key 无效，请重新复制 Project API anon public key";
+  return message.length > 80 ? `${message.slice(0, 80)}...` : message;
 }
 
 function normalizeState(value) {

@@ -29,6 +29,7 @@ let autoSyncTimer = 0;
 let autoSyncInFlight = false;
 let autoSyncPending = false;
 let lastSupabaseError = "";
+const CLIENT_ID = getClientId();
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindElements();
@@ -103,7 +104,7 @@ function bindEvents() {
 }
 
 function emptyState() {
-  return { stocks: [], prices: [], news: [], concepts: [], reports: [], deletedStocks: [] };
+  return { stocks: [], prices: [], news: [], concepts: [], reports: [], deletedStocks: [], syncMeta: {} };
 }
 
 async function loadState() {
@@ -310,16 +311,20 @@ async function saveSupabaseState(nextState, forceStatus = false) {
   const config = getSupabaseConfig();
   if (!config) return false;
   try {
-    const normalized = normalizeState(nextState);
+    const normalized = withSyncMeta(normalizeState(nextState));
     await writeSupabaseRow(config, normalized);
-    const verifiedState = await loadSupabaseState(true, false);
+    let verifiedState = await loadSupabaseState(true, false);
     if (!verifiedState) throw new Error(lastSupabaseError || "写入后无法读回云端数据");
-    if (!statesEqual(verifiedState, normalized)) {
+    if (!sameSyncDigest(verifiedState, normalized) && !statesEqual(verifiedState, normalized)) {
       const merged = mergeStates(normalized, verifiedState);
+      merged.syncMeta = normalized.syncMeta;
       await writeSupabaseRow(config, merged);
       const mergedVerifiedState = await loadSupabaseState(true, false);
       if (!mergedVerifiedState) throw new Error(lastSupabaseError || "合并后无法读回云端数据");
-      if (!statesEqual(mergedVerifiedState, merged)) throw new Error("合并写入后云端回读不一致");
+      if (!sameSyncDigest(mergedVerifiedState, merged) && !statesEqual(mergedVerifiedState, merged)) {
+        throw new Error("合并写入后云端回读不一致");
+      }
+      verifiedState = mergedVerifiedState;
       state = merged;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       render();
@@ -399,9 +404,24 @@ function normalizeState(value) {
     news: Array.isArray(value?.news) ? value.news : [],
     concepts: legacyConcepts,
     reports: Array.isArray(value?.reports) ? value.reports : [],
-    deletedStocks: deletedStocks.map(normalizeDeletedStock).filter((item) => item.id || item.code)
+    deletedStocks: deletedStocks.map(normalizeDeletedStock).filter((item) => item.id || item.code),
+    syncMeta: value?.syncMeta && typeof value.syncMeta === "object" ? value.syncMeta : {}
   };
   return applyDeletedStocks(normalized);
+}
+
+function withSyncMeta(nextState) {
+  const normalized = normalizeState(nextState);
+  normalized.syncMeta = {
+    digest: stableNumber(stableStringify(canonicalState(normalized))).toString(36),
+    clientId: CLIENT_ID,
+    updatedAt: new Date().toISOString()
+  };
+  return normalized;
+}
+
+function sameSyncDigest(a, b) {
+  return Boolean(a?.syncMeta?.digest && b?.syncMeta?.digest && a.syncMeta.digest === b.syncMeta.digest);
 }
 
 function normalizeStock(stock, legacyConcepts = []) {
@@ -576,6 +596,19 @@ function stableStringify(value) {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function getClientId() {
+  const key = "stock-hotspot-client-id-v1";
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved) return saved;
+    const next = makeId();
+    localStorage.setItem(key, next);
+    return next;
+  } catch {
+    return makeId();
+  }
 }
 
 function setDefaultDates() {

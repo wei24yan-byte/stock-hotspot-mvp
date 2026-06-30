@@ -528,7 +528,6 @@ function canonicalState(value) {
         code: stock.code,
         market: stock.market,
         name: stock.name,
-        addedAt: stock.addedAt,
         active: stock.active !== false,
         concepts: normalizeConceptList(stock.concepts).sort((a, b) => a.localeCompare(b))
       }))
@@ -538,8 +537,8 @@ function canonicalState(value) {
         key: `${stockById.get(price.stockId) || price.stockId}-${price.date}`,
         stock: stockById.get(price.stockId) || price.stockId,
         date: price.date,
-        close: Number(price.close),
-        changePct: Number(price.changePct)
+        close: Number.isFinite(Number(price.close)) ? Number(price.close).toFixed(4) : "",
+        changePct: Number.isFinite(Number(price.changePct)) ? Number(price.changePct).toFixed(4) : ""
       }))
       .sort((a, b) => a.key.localeCompare(b.key)),
     news: [...data.news]
@@ -547,18 +546,14 @@ function canonicalState(value) {
         key: `${stockById.get(item.stockId) || item.stockId}-${item.date}-${item.title}`,
         stock: stockById.get(item.stockId) || item.stockId,
         date: item.date,
-        title: item.title,
-        source: item.source || "",
-        url: item.url || "",
-        summary: item.summary || ""
+        title: item.title
       }))
       .sort((a, b) => a.key.localeCompare(b.key)),
     reports: [...data.reports]
       .map((item) => ({
         key: item.id || `${item.type}-${item.date}`,
         type: item.type || "",
-        date: item.date || "",
-        content: item.content || ""
+        date: item.date || ""
       }))
       .sort((a, b) => a.key.localeCompare(b.key)),
     deletedStocks: [...(data.deletedStocks || [])]

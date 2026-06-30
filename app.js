@@ -117,10 +117,12 @@ async function loadState() {
     const merged = mergeStates(localState, cloudState);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
     if (!statesEqual(merged, cloudState)) setTimeout(() => queueSupabaseSync(300), 0);
+    updateSupabaseStatus(`已合并本机与云端：${stateSummary(merged)}`);
     return merged;
   }
   if (cloudState) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudState));
+    updateSupabaseStatus(`已读取云端：${stateSummary(cloudState)}`);
     return cloudState;
   }
 
@@ -274,12 +276,12 @@ async function pullSupabaseState() {
     return;
   }
   const localState = loadLocalState();
-  state = localState ? mergeStates(localState, cloudState) : cloudState;
+  state = localState ? mergeStates(localState, cloudState) : normalizeState(cloudState);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
   if (!statesEqual(state, cloudState)) queueSupabaseSync(300);
-  updateSupabaseStatus("已合并同步");
-  showToast("已从云端读取并合并");
+  updateSupabaseStatus(`已合并本机与云端：${stateSummary(state)}`);
+  showToast("已合并本机与云端");
 }
 
 async function loadSupabaseState(showErrors = false, updateStatus = true) {

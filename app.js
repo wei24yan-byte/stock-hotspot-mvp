@@ -284,7 +284,7 @@ async function pullSupabaseState() {
   showToast("已合并本机与云端");
 }
 
-async function loadSupabaseState(showErrors = false, updateStatus = true) {
+async function loadSupabaseState(showErrors = false, updateStatus = true, createIfMissing = true) {
   const config = getSupabaseConfig();
   if (!config) return null;
   try {
@@ -294,6 +294,7 @@ async function loadSupabaseState(showErrors = false, updateStatus = true) {
     const rows = await response.json();
     const data = rows?.[0]?.data;
     if (!data) {
+      if (!createIfMissing) return null;
       const created = await saveSupabaseState(emptyState());
       if (!created) return null;
       return emptyState();
@@ -313,7 +314,9 @@ async function saveSupabaseState(nextState, forceStatus = false) {
   const config = getSupabaseConfig();
   if (!config) return false;
   try {
-    const normalized = withSyncMeta(normalizeState(nextState));
+    const cloudBeforeWrite = await loadSupabaseState(false, false, false);
+    const mergedBeforeWrite = cloudBeforeWrite ? mergeStates(nextState, cloudBeforeWrite) : normalizeState(nextState);
+    const normalized = withSyncMeta(mergedBeforeWrite);
     await writeSupabaseRow(config, normalized);
     let verifiedState = await loadSupabaseState(true, false);
     if (!verifiedState) throw new Error(lastSupabaseError || "写入后无法读回云端数据");

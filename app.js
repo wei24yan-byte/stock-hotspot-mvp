@@ -114,7 +114,7 @@ async function loadState() {
 
   const cloudState = await loadSupabaseState();
   if (cloudState && localState) {
-    const merged = mergeStates(localState, cloudState);
+    const merged = mergeStates(localState, cloudState, { keepIncomingStocksOverPrimaryDeletes: true });
     localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
     if (!statesEqual(merged, cloudState)) setTimeout(() => queueSupabaseSync(300), 0);
     updateSupabaseStatus(`已合并本机与云端：${stateSummary(merged)}`);
@@ -276,7 +276,7 @@ async function pullSupabaseState() {
     return;
   }
   const localState = loadLocalState();
-  state = localState ? mergeStates(localState, cloudState) : normalizeState(cloudState);
+  state = localState ? mergeStates(localState, cloudState, { keepIncomingStocksOverPrimaryDeletes: true }) : normalizeState(cloudState);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
   if (!statesEqual(state, cloudState)) queueSupabaseSync(300);
@@ -458,11 +458,15 @@ function normalizeDeletedStock(item) {
   };
 }
 
-function mergeStates(primary, secondary) {
+function mergeStates(primary, secondary, options = {}) {
   const base = normalizeState(primary);
   const incoming = normalizeState(secondary);
+  const incomingStockKeys = new Set(incoming.stocks.flatMap((stock) => [stock.id, `${stock.market}-${stock.code}`]));
+  const primaryDeletedStocks = options.keepIncomingStocksOverPrimaryDeletes
+    ? base.deletedStocks.filter((item) => !stockDeleteKeys(item).some((key) => incomingStockKeys.has(key)))
+    : base.deletedStocks;
   const deletedStocks = dedupeBy(
-    [...base.deletedStocks, ...incoming.deletedStocks],
+    [...primaryDeletedStocks, ...incoming.deletedStocks],
     (item) => `${item.id || ""}|${item.market || ""}|${item.code || ""}`
   );
   const deletedKeys = new Set(deletedStocks.flatMap((item) => stockDeleteKeys(item)));

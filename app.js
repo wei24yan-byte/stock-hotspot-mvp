@@ -58,11 +58,6 @@ function bindElements() {
     "metricDaily",
     "metricConcept",
     "metricNews",
-    "priceForm",
-    "priceStock",
-    "priceDate",
-    "priceClose",
-    "priceChange",
     "stockCards",
     "buildReportsBtn",
     "copyReportBtn",
@@ -92,7 +87,6 @@ function bindEvents() {
   els.stockCode.addEventListener("blur", () => refreshStockNameFromCode());
   els.refreshBtn.addEventListener("click", () => generateDailyUpdate());
   els.sampleBtn.addEventListener("click", seedSamples);
-  els.priceForm.addEventListener("submit", saveManualPrice);
   els.buildReportsBtn.addEventListener("click", buildReports);
   els.copyReportBtn.addEventListener("click", copyLatestReport);
   els.saveSupabaseBtn.addEventListener("click", saveSupabaseConfig);
@@ -460,6 +454,7 @@ function normalizeStock(stock, legacyConcepts = []) {
     market: inferMarket(stock?.code || "") || stock?.market || "SH",
     addedAt: stock?.addedAt || stock?.added_at || formatDate(new Date()),
     active: stock?.active !== false,
+    pinned: stock?.pinned === true,
     concepts
   };
 }
@@ -500,6 +495,7 @@ function mergeStates(primary, secondary, options = {}) {
     existing.name = existing.name || stock.name;
     existing.addedAt = existing.addedAt <= stock.addedAt ? existing.addedAt : stock.addedAt;
     existing.active = existing.active !== false && stock.active !== false;
+    existing.pinned = existing.pinned === true || stock.pinned === true;
     existing.concepts = normalizeConceptList([...(existing.concepts || []), ...(stock.concepts || [])]);
   });
 
@@ -573,6 +569,7 @@ function canonicalState(value) {
         market: stock.market,
         name: stock.name,
         active: stock.active !== false,
+        pinned: stock.pinned === true,
         concepts: normalizeConceptList(stock.concepts).sort((a, b) => a.localeCompare(b))
       }))
       .sort((a, b) => a.key.localeCompare(b.key)),
@@ -638,7 +635,6 @@ function getClientId() {
 function setDefaultDates() {
   const today = formatDate(new Date());
   els.todayLabel.textContent = today;
-  els.priceDate.value = today;
   updateMarketPreview();
 }
 
@@ -693,7 +689,8 @@ async function addStockFromForm() {
     market,
     concepts,
     addedAt: formatDate(new Date()),
-    active: true
+    active: true,
+    pinned: false
   });
 
   els.stockCode.value = "";
@@ -719,7 +716,8 @@ async function seedSamples() {
         market: item.market,
         concepts: normalizeConceptList(item.concepts),
         addedAt: formatDate(new Date()),
-        active: true
+        active: true,
+        pinned: false
       });
       count += 1;
     }
@@ -782,28 +780,6 @@ async function generateDailyUpdate(showMessage = true) {
   if (showMessage) {
     showToast(failed ? `已更新${updated}只，${failed}只未取到` : "真实行情已更新");
   }
-}
-
-function saveManualPrice(event) {
-  event.preventDefault();
-  const stockId = els.priceStock.value;
-  const close = Number(els.priceClose.value);
-  const changePct = Number(els.priceChange.value);
-  const date = els.priceDate.value;
-
-  if (!stockId || !date || !Number.isFinite(close) || close <= 0 || !Number.isFinite(changePct)) {
-    showToast("记录不完整");
-    return;
-  }
-
-  upsertPrice({ stockId, date, close: round(close, 2), changePct: round(changePct, 2) });
-  syncConceptSnapshot();
-  buildReports(false);
-  saveState();
-  render();
-  els.priceClose.value = "";
-  els.priceChange.value = "";
-  showToast("收盘已记录");
 }
 
 function upsertPrice(price) {
@@ -914,7 +890,6 @@ function render() {
   renderStockTable();
   renderConcepts();
   renderNews();
-  renderPriceOptions();
   renderStockCards();
   renderReports();
 }
@@ -939,14 +914,17 @@ function renderStockTable() {
   els.stockTableBody.innerHTML = "";
   els.stockEmpty.classList.toggle("show", state.stocks.length === 0);
 
-  state.stocks.forEach((stock) => {
+  orderedStocks().forEach((stock) => {
     const latest = latestPrice(stock.id);
     const row = document.createElement("tr");
     const tags = conceptsForStock(stock.id).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
     row.innerHTML = `
       <td data-label="股票">
         <div class="stock-title">
-          <strong>${escapeHtml(stock.name)}</strong>
+          <div class="stock-name-line">
+            <strong>${escapeHtml(stock.name)}</strong>
+            <button class="pin-button ${stock.pinned ? "active" : ""}" data-action="pin" data-stock-id="${stock.id}" title="${stock.pinned ? "取消置顶" : "置顶"}" aria-label="${stock.pinned ? "取消置顶" : "置顶"}">${stock.pinned ? "★" : "☆"}</button>
+          </div>
           <span>${stock.market}${stock.code}</span>
         </div>
       </td>
@@ -959,6 +937,10 @@ function renderStockTable() {
       <td data-label="概念"><div class="tag-row">${tags || '<span class="muted">-</span>'}</div></td>
     `;
     els.stockTableBody.appendChild(row);
+  });
+
+  els.stockTableBody.querySelectorAll("[data-action='pin']").forEach((button) => {
+    button.addEventListener("click", () => togglePinnedStock(button.dataset.stockId));
   });
 }
 
@@ -998,15 +980,9 @@ function renderNews() {
     : `<div class="muted">暂无新闻</div>`;
 }
 
-function renderPriceOptions() {
-  els.priceStock.innerHTML = state.stocks.length
-    ? state.stocks.map((stock) => `<option value="${stock.id}">${escapeHtml(stock.name)} ${stock.code}</option>`).join("")
-    : `<option value="">暂无股票</option>`;
-}
-
 function renderStockCards() {
   els.stockCards.innerHTML = state.stocks.length
-    ? state.stocks
+    ? orderedStocks()
         .map((stock) => {
           const latest = latestPrice(stock.id);
           const concepts = conceptsForStock(stock.id)
@@ -1022,6 +998,7 @@ function renderStockCards() {
                 </div>
                 <div class="stock-actions">
                   <button class="ghost-button" data-action="toggle" data-stock-id="${stock.id}">${stock.active ? "停用" : "启用"}</button>
+                  <button class="ghost-button" data-action="pin" data-stock-id="${stock.id}">${stock.pinned ? "取消置顶" : "置顶"}</button>
                   <button class="danger-button" data-action="delete" data-stock-id="${stock.id}">删除</button>
                 </div>
               </div>
@@ -1055,6 +1032,10 @@ function renderStockCards() {
     });
   });
 
+  els.stockCards.querySelectorAll("[data-action='pin']").forEach((button) => {
+    button.addEventListener("click", () => togglePinnedStock(button.dataset.stockId));
+  });
+
   els.stockCards.querySelectorAll("[data-action='delete']").forEach((button) => {
     button.addEventListener("click", () => {
       const stock = state.stocks.find((item) => item.id === button.dataset.stockId);
@@ -1078,6 +1059,19 @@ function renderStockCards() {
       showToast("概念已保存");
     });
   });
+}
+
+function orderedStocks() {
+  return [...state.stocks].sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true));
+}
+
+function togglePinnedStock(stockId) {
+  const stock = state.stocks.find((item) => item.id === stockId);
+  if (!stock) return;
+  stock.pinned = stock.pinned !== true;
+  saveState();
+  render();
+  showToast(stock.pinned ? "已置顶" : "已取消置顶");
 }
 
 function deleteStock(stockId) {

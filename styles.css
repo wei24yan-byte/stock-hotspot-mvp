@@ -370,14 +370,11 @@ td:nth-child(8) {
 
 .stock-title {
   display: grid;
+  position: relative;
   gap: 2px;
-}
-
-.stock-name-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  min-height: 28px;
   min-width: 0;
+  padding-right: 32px;
 }
 
 .stock-title strong {
@@ -391,7 +388,9 @@ td:nth-child(8) {
 
 .pin-button {
   display: inline-grid;
-  flex: 0 0 26px;
+  position: absolute;
+  top: 0;
+  right: 0;
   width: 26px;
   height: 26px;
   place-items: center;

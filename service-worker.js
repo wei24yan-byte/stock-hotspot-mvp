@@ -1,10 +1,11 @@
-const CACHE_NAME = "stock-hotspot-mvp-v27";
+const CACHE_NAME = "stock-hotspot-mvp-v28";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
-  "./manifest.webmanifest"
+  "./manifest.webmanifest",
+  "./assets/icon.svg"
 ];
 
 self.addEventListener("install", (event) => {

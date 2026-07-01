@@ -244,14 +244,25 @@ function updateSupabaseStatus(text) {
   if (els.supabaseStatus) els.supabaseStatus.textContent = text;
 }
 
-async function saveSupabaseConfig() {
+function readSupabaseConfigFromForm() {
   const url = String(els.supabaseUrl.value || "").trim().replace(/\/+$/, "");
   const anonKey = String(els.supabaseAnonKey.value || "").trim();
-  if (!url || !anonKey) {
+  return url && anonKey ? { url, anonKey } : null;
+}
+
+function saveSupabaseConfigFromForm() {
+  const config = readSupabaseConfigFromForm();
+  if (!config) {
     showToast("请填写 URL 和 anon key");
-    return;
+    updateSupabaseStatus("未连接");
+    return null;
   }
-  localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify({ url, anonKey }));
+  localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify(config));
+  return config;
+}
+
+async function saveSupabaseConfig() {
+  if (!saveSupabaseConfigFromForm()) return;
   lastSupabaseError = "";
   updateSupabaseStatus("上传中");
   const ok = await saveSupabaseState(state, true);
@@ -267,6 +278,7 @@ async function saveSupabaseConfig() {
 }
 
 async function pullSupabaseState() {
+  if (!saveSupabaseConfigFromForm()) return;
   lastSupabaseError = "";
   updateSupabaseStatus("读取中");
   const cloudState = await loadSupabaseState(true);
@@ -334,6 +346,9 @@ async function saveSupabaseState(nextState, forceStatus = false) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       render();
     }
+    state = normalizeState(verifiedState);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    render();
     if (forceStatus) updateSupabaseStatus("已同步");
     lastSupabaseError = "";
     return true;

@@ -178,6 +178,32 @@ function queueSupabaseSync(delay = AUTO_SYNC_DELAY_MS) {
   autoSyncTimer = setTimeout(runQueuedSupabaseSync, delay);
 }
 
+function cancelQueuedSupabaseSync() {
+  autoSyncPending = false;
+  clearTimeout(autoSyncTimer);
+}
+
+function currentStateSnapshot() {
+  return JSON.parse(JSON.stringify(normalizeState(state)));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runSupabaseSave(snapshotFactory, forceStatus = false) {
+  while (autoSyncInFlight) {
+    await delay(250);
+  }
+  autoSyncInFlight = true;
+  try {
+    const snapshot = typeof snapshotFactory === "function" ? snapshotFactory() : snapshotFactory;
+    return await saveSupabaseState(snapshot, forceStatus);
+  } finally {
+    autoSyncInFlight = false;
+  }
+}
+
 async function runQueuedSupabaseSync() {
   if (!getSupabaseConfig()) {
     autoSyncPending = false;
@@ -192,13 +218,10 @@ async function runQueuedSupabaseSync() {
     return;
   }
 
-  autoSyncInFlight = true;
   autoSyncPending = false;
   updateSupabaseStatus("自动上传中");
 
-  const snapshot = JSON.parse(JSON.stringify(normalizeState(state)));
-  const ok = await saveSupabaseState(snapshot);
-  autoSyncInFlight = false;
+  const ok = await runSupabaseSave(currentStateSnapshot);
 
   if (autoSyncPending) {
     clearTimeout(autoSyncTimer);
@@ -257,17 +280,21 @@ function saveSupabaseConfigFromForm() {
 
 async function saveSupabaseConfig() {
   if (!saveSupabaseConfigFromForm()) return;
+  cancelQueuedSupabaseSync();
   lastSupabaseError = "";
-  updateSupabaseStatus("上传中");
-  const ok = await saveSupabaseState(state, true);
-  if (ok) {
-    const cloudState = await loadSupabaseState(true, false);
-    const verified = cloudState && statesEqual(normalizeState(state), cloudState);
-    updateSupabaseStatus(verified ? `已同步并验证：${stateSummary(state)}` : "同步失败：云端回读不一致");
-    showToast(verified ? "云端同步已开启" : "上传后云端校验失败");
-  } else {
-    updateSupabaseStatus(`同步失败：${lastSupabaseError || "连接失败"}`);
-    showToast(lastSupabaseError || "云端连接失败");
+  updateSupabaseStatus(autoSyncInFlight ? "等待当前同步完成" : "上传中");
+  els.saveSupabaseBtn.disabled = true;
+  try {
+    const ok = await runSupabaseSave(currentStateSnapshot, true);
+    if (ok) {
+      updateSupabaseStatus(`已同步并验证：${stateSummary(state)}`);
+      showToast("云端同步已开启");
+    } else {
+      updateSupabaseStatus(`同步失败：${lastSupabaseError || "连接失败"}`);
+      showToast(lastSupabaseError || "云端连接失败");
+    }
+  } finally {
+    els.saveSupabaseBtn.disabled = false;
   }
 }
 

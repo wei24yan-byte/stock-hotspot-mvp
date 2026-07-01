@@ -921,10 +921,8 @@ function renderStockTable() {
     row.innerHTML = `
       <td data-label="股票">
         <div class="stock-title">
-          <div class="stock-name-line">
-            <strong>${escapeHtml(stock.name)}</strong>
-            <button class="pin-button ${stock.pinned ? "active" : ""}" data-action="pin" data-stock-id="${stock.id}" title="${stock.pinned ? "取消置顶" : "置顶"}" aria-label="${stock.pinned ? "取消置顶" : "置顶"}">${stock.pinned ? "★" : "☆"}</button>
-          </div>
+          <button class="pin-button ${stock.pinned ? "active" : ""}" data-action="pin" data-stock-id="${stock.id}" title="${stock.pinned ? "取消置顶" : "置顶"}" aria-label="${stock.pinned ? "取消置顶" : "置顶"}">${stock.pinned ? "★" : "☆"}</button>
+          <strong>${escapeHtml(stock.name)}</strong>
           <span>${stock.market}${stock.code}</span>
         </div>
       </td>

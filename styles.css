@@ -373,6 +373,13 @@ td:nth-child(8) {
   gap: 2px;
 }
 
+.stock-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .stock-title strong {
   font-size: 14px;
 }
@@ -380,6 +387,27 @@ td:nth-child(8) {
 .stock-title span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.pin-button {
+  display: inline-grid;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.pin-button.active {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: var(--amber-soft);
+  color: #b45309;
 }
 
 .tag-row,

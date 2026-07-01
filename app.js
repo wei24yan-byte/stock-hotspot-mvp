@@ -108,7 +108,7 @@ async function loadState() {
 
   const cloudState = await loadSupabaseState();
   if (cloudState && localState) {
-    const merged = mergeStates(localState, cloudState, { keepIncomingStocksOverPrimaryDeletes: true });
+    const merged = mergeCloudIntoLocal(localState, cloudState);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
     if (!statesEqual(merged, cloudState)) setTimeout(() => queueSupabaseSync(300), 0);
     updateSupabaseStatus(`已合并本机与云端：${stateSummary(merged)}`);
@@ -309,12 +309,14 @@ async function pullSupabaseState() {
     return;
   }
   const localState = loadLocalState();
-  state = localState ? mergeStates(localState, cloudState, { keepIncomingStocksOverPrimaryDeletes: true }) : normalizeState(cloudState);
+  const previousCount = localState ? localState.stocks.length : 0;
+  state = localState ? mergeCloudIntoLocal(localState, cloudState) : normalizeState(cloudState);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
   if (!statesEqual(state, cloudState)) queueSupabaseSync(300);
   updateSupabaseStatus(`已合并本机与云端：${stateSummary(state)}`);
-  showToast("已合并本机与云端");
+  const deletedCount = Math.max(0, previousCount - state.stocks.length);
+  showToast(deletedCount ? `已同步，删除${deletedCount}只` : "已合并本机与云端");
 }
 
 async function loadSupabaseState(showErrors = false, updateStatus = true, createIfMissing = true) {
@@ -528,6 +530,16 @@ function mergeStates(primary, secondary, options = {}) {
   return applyDeletedStocks(merged);
 }
 
+function mergeCloudIntoLocal(localState, cloudState) {
+  const cloud = normalizeState(cloudState);
+  const merged = mergeStates(localState, cloud, { keepIncomingStocksOverPrimaryDeletes: true });
+  merged.deletedStocks = dedupeBy(
+    [...(merged.deletedStocks || []), ...(cloud.deletedStocks || [])],
+    deleteRecordKey
+  );
+  return applyDeletedStocks(merged);
+}
+
 function remapStockRef(item, idMap) {
   const next = { ...item };
   if (idMap.has(next.stockId)) next.stockId = idMap.get(next.stockId);
@@ -538,7 +550,7 @@ function applyDeletedStocks(nextState) {
   const deletedKeys = new Set((nextState.deletedStocks || []).flatMap((item) => stockDeleteKeys(item)));
   const stocks = (nextState.stocks || []).filter((stock) => {
     const key = `${stock.market}-${stock.code}`;
-    return !deletedKeys.has(stock.id) && !deletedKeys.has(key);
+    return !deletedKeys.has(stock.id) && !deletedKeys.has(key) && !deletedKeys.has(codeDeleteKey(stock.code));
   });
   const stockIds = new Set(stocks.map((stock) => stock.id));
   return {
@@ -554,7 +566,16 @@ function stockDeleteKeys(item) {
   const keys = [];
   if (item?.id) keys.push(item.id);
   if (item?.code && item?.market) keys.push(`${item.market}-${item.code}`);
+  if (item?.code) keys.push(codeDeleteKey(item.code));
   return keys;
+}
+
+function codeDeleteKey(code) {
+  return `CODE-${cleanCode(code || "")}`;
+}
+
+function deleteRecordKey(item) {
+  return `${item.id || ""}|${item.market || ""}|${item.code || ""}`;
 }
 
 function dedupeBy(items, keyFn) {
@@ -1100,7 +1121,7 @@ function deleteStock(stockId) {
           deletedAt: formatDate(new Date())
         }
       ],
-      (item) => `${item.id || ""}|${item.market || ""}|${item.code || ""}`
+      deleteRecordKey
     );
   }
   state.stocks = state.stocks.filter((stock) => stock.id !== stockId);
@@ -1110,6 +1131,7 @@ function deleteStock(stockId) {
   syncConceptSnapshot();
   buildReports(false);
   saveState();
+  queueSupabaseSync(0);
   render();
 }
 

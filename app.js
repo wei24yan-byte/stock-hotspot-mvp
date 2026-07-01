@@ -350,24 +350,8 @@ async function saveSupabaseState(nextState, forceStatus = false) {
     const cloudBeforeWrite = await loadSupabaseState(false, false, false);
     const mergedBeforeWrite = cloudBeforeWrite ? mergeStates(nextState, cloudBeforeWrite) : normalizeState(nextState);
     const normalized = withSyncMeta(mergedBeforeWrite);
-    await writeSupabaseRow(config, normalized);
-    let verifiedState = await loadSupabaseState(true, false);
-    if (!verifiedState) throw new Error(lastSupabaseError || "写入后无法读回云端数据");
-    if (!sameSyncDigest(verifiedState, normalized) && !statesEqual(verifiedState, normalized)) {
-      const merged = mergeStates(normalized, verifiedState);
-      merged.syncMeta = normalized.syncMeta;
-      await writeSupabaseRow(config, merged);
-      const mergedVerifiedState = await loadSupabaseState(true, false);
-      if (!mergedVerifiedState) throw new Error(lastSupabaseError || "合并后无法读回云端数据");
-      if (!sameSyncDigest(mergedVerifiedState, merged) && !statesEqual(mergedVerifiedState, merged)) {
-        throw new Error("合并写入后云端回读不一致");
-      }
-      verifiedState = mergedVerifiedState;
-      state = merged;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      render();
-    }
-    state = normalizeState(verifiedState);
+    const savedState = await writeSupabaseRow(config, normalized);
+    state = normalizeState(savedState || normalized);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     render();
     if (forceStatus) updateSupabaseStatus("已同步");
@@ -382,6 +366,7 @@ async function saveSupabaseState(nextState, forceStatus = false) {
 }
 
 async function writeSupabaseRow(config, normalized) {
+  let rows = [];
   let response = await fetch(`${config.url}/rest/v1/app_state?id=eq.${encodeURIComponent(SUPABASE_STATE_ROW_ID)}`, {
     method: "PATCH",
     headers: {
@@ -392,7 +377,7 @@ async function writeSupabaseRow(config, normalized) {
     body: JSON.stringify({ data: normalized })
   });
   if (response.ok) {
-    const rows = await response.json().catch(() => []);
+    rows = await response.json().catch(() => []);
     if (!rows.length) {
       response = await fetch(`${config.url}/rest/v1/app_state`, {
         method: "POST",
@@ -403,12 +388,15 @@ async function writeSupabaseRow(config, normalized) {
         },
         body: JSON.stringify({ id: SUPABASE_STATE_ROW_ID, data: normalized })
       });
-    } else if (rows[0]?.data && !statesEqual(normalizeState(rows[0].data), normalized)) {
-      throw new Error("写入后返回数据不一致");
+      if (response.ok) rows = await response.json().catch(() => []);
     }
   }
   if (!response.ok) throw new Error(await supabaseErrorMessage(response, "写入失败"));
-  return true;
+  const saved = rows?.[0]?.data ? normalizeState(rows[0].data) : normalized;
+  if (!sameSyncDigest(saved, normalized) && !statesEqual(saved, normalized)) {
+    throw new Error("写入后返回数据不一致");
+  }
+  return saved;
 }
 
 function supabaseHeaders(config) {

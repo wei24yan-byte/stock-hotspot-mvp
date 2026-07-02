@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f7f8fa" />
     <title>热点股票台账</title>
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./styles.css?v=12" />
+    <link rel="stylesheet" href="./styles.css?v=14" />
   </head>
   <body>
     <div class="app-shell">
@@ -20,26 +20,6 @@
           <button class="icon-button" id="refreshBtn" title="更新真实行情" aria-label="更新真实行情">↻</button>
         </div>
       </header>
-
-      <section class="quick-add" aria-label="添加股票">
-        <label>
-          <span>代码</span>
-          <input id="stockCode" inputmode="latin" autocomplete="off" placeholder="600519" />
-        </label>
-        <label>
-          <span>名称（自动）</span>
-          <input id="stockName" autocomplete="off" placeholder="输入代码后自动显示" />
-        </label>
-        <div class="market-preview">
-          <span>市场</span>
-          <strong id="marketPreview">输入代码后识别</strong>
-        </div>
-        <label>
-          <span>概念</span>
-          <input id="stockConcepts" autocomplete="off" placeholder="AI算力、机器人" />
-        </label>
-        <button id="addStockBtn" class="primary-button">＋ 添加</button>
-      </section>
 
       <nav class="tabs" aria-label="视图">
         <button class="tab active" data-view="dashboard">总览</button>
@@ -63,17 +43,12 @@
               <span>最热概念</span>
               <strong id="metricConcept">-</strong>
             </article>
-            <article class="metric-card">
-              <span>新闻条目</span>
-              <strong id="metricNews">0</strong>
-            </article>
           </div>
 
           <div class="dashboard-grid">
             <section class="panel wide-panel">
               <div class="panel-head">
                 <h2>股票池</h2>
-                <button class="ghost-button" id="sampleBtn">载入样例</button>
               </div>
               <div class="table-wrap">
                 <table>
@@ -101,17 +76,30 @@
               </div>
               <div id="conceptList" class="concept-list"></div>
             </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <h2>最新新闻</h2>
-              </div>
-              <div id="newsList" class="news-list"></div>
-            </section>
           </div>
         </section>
 
         <section id="stocksView" class="view">
+          <section class="quick-add stock-add-form" aria-label="添加股票">
+            <label>
+              <span>代码</span>
+              <input id="stockCode" inputmode="latin" autocomplete="off" placeholder="600519" />
+            </label>
+            <label>
+              <span>名称</span>
+              <input id="stockName" autocomplete="off" placeholder="贵州茅台" />
+            </label>
+            <div class="market-preview">
+              <span>市场</span>
+              <strong id="marketPreview">输入代码或名称后识别</strong>
+            </div>
+            <label>
+              <span>概念</span>
+              <input id="stockConcepts" autocomplete="off" placeholder="AI算力、机器人" />
+            </label>
+            <button id="addStockBtn" class="primary-button">＋ 添加</button>
+          </section>
+
           <div class="split-grid">
             <section class="panel wide-panel">
               <div class="panel-head">
@@ -179,6 +167,6 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=29"></script>
+    <script src="./app.js?v=33"></script>
   </body>
 </html>

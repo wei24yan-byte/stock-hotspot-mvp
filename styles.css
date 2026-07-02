@@ -159,6 +159,10 @@ h2 {
   box-shadow: var(--shadow);
 }
 
+.stock-add-form {
+  margin-bottom: 12px;
+}
+
 .market-preview {
   display: grid;
   gap: 6px;
@@ -245,7 +249,7 @@ select:focus {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
   margin-bottom: 12px;
 }
@@ -619,11 +623,28 @@ td:nth-child(8) {
     grid-column: span 2;
   }
 
-  .metric-grid,
   .dashboard-grid,
   .split-grid,
   .cloud-sync-form {
     grid-template-columns: 1fr;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .metric-card {
+    padding: 12px;
+  }
+
+  .metric-card span {
+    margin-bottom: 6px;
+    font-size: 12px;
+  }
+
+  .metric-card strong {
+    font-size: 20px;
   }
 
   .wide-panel {
@@ -647,11 +668,11 @@ td:nth-child(8) {
 
   tbody tr {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 9px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 12px;
     width: 100%;
-    margin-bottom: 10px;
-    padding: 12px;
+    margin-bottom: 8px;
+    padding: 10px;
     border: 1px solid var(--line);
     border-radius: 8px;
     background: #fff;
@@ -663,21 +684,22 @@ td:nth-child(8) {
 
   tbody td {
     display: grid;
-    grid-template-columns: minmax(72px, 28%) minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
     width: 100% !important;
-    align-items: flex-start;
-    gap: 12px;
+    align-items: baseline;
+    gap: 6px;
     border-bottom: 0;
     padding: 0;
     text-align: left;
     word-break: normal;
     overflow-wrap: normal;
+    font-size: 13px;
   }
 
   tbody td::before {
     content: attr(data-label);
     color: var(--muted);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 650;
     text-align: left;
     white-space: nowrap;
@@ -685,6 +707,7 @@ td:nth-child(8) {
 
   tbody td[data-label="股票"] {
     display: block;
+    grid-column: 1 / -1;
     text-align: left;
   }
 
@@ -694,7 +717,8 @@ td:nth-child(8) {
 
   tbody td[data-label="概念"] {
     display: grid;
-    grid-template-columns: minmax(72px, 28%) minmax(0, 1fr);
+    grid-column: 1 / -1;
+    grid-template-columns: auto minmax(0, 1fr);
     text-align: left;
   }
 
@@ -721,6 +745,20 @@ td:nth-child(8) {
   .tag {
     word-break: keep-all;
     overflow-wrap: normal;
+  }
+
+  .stock-title {
+    min-height: 24px;
+  }
+
+  .tag-row {
+    gap: 6px;
+  }
+
+  .tag {
+    min-height: 22px;
+    padding: 0 7px;
+    font-size: 11px;
   }
 }
 
@@ -757,8 +795,16 @@ td:nth-child(8) {
     z-index: 5;
   }
 
-  .metric-grid,
   .mini-stats {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  tbody tr {
+    gap: 7px 10px;
+    padding: 9px;
   }
 }

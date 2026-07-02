@@ -5,6 +5,8 @@ const API_STATE_URL = "./api/state";
 const STATIC_STATE_URL = "./data/state.json";
 const AUTO_SYNC_DELAY_MS = 1000;
 const AUTO_SYNC_RETRY_MS = 12000;
+const STOCK_LOOKUP_DELAY_MS = 280;
+const MARKET_HOLIDAYS = new Set([]);
 
 const newsTemplates = [
   "{name}盘中活跃，市场关注{concept}方向催化",
@@ -25,6 +27,8 @@ let state = emptyState();
 let apiAvailable = false;
 let stockLookupTimer = 0;
 let stockLookupRequestId = 0;
+let stockNameLookupTimer = 0;
+let stockNameLookupRequestId = 0;
 let autoSyncTimer = 0;
 let autoSyncInFlight = false;
 let autoSyncPending = false;
@@ -49,15 +53,12 @@ function bindElements() {
     "marketPreview",
     "stockConcepts",
     "addStockBtn",
-    "sampleBtn",
     "stockTableBody",
     "stockEmpty",
     "conceptList",
-    "newsList",
     "metricStocks",
     "metricDaily",
     "metricConcept",
-    "metricNews",
     "stockCards",
     "buildReportsBtn",
     "copyReportBtn",
@@ -85,8 +86,9 @@ function bindEvents() {
   els.addStockBtn.addEventListener("click", addStockFromForm);
   els.stockCode.addEventListener("input", handleStockCodeInput);
   els.stockCode.addEventListener("blur", () => refreshStockNameFromCode());
+  els.stockName.addEventListener("input", handleStockNameInput);
+  els.stockName.addEventListener("blur", () => refreshStockCodeFromName());
   els.refreshBtn.addEventListener("click", () => generateDailyUpdate());
-  els.sampleBtn.addEventListener("click", seedSamples);
   els.buildReportsBtn.addEventListener("click", buildReports);
   els.copyReportBtn.addEventListener("click", copyLatestReport);
   els.saveSupabaseBtn.addEventListener("click", saveSupabaseConfig);
@@ -688,12 +690,16 @@ function setView(viewName) {
 }
 
 async function addStockFromForm() {
+  if (!cleanCode(els.stockCode.value) && els.stockName.value.trim()) {
+    await refreshStockCodeFromName(true);
+  }
+
   const code = cleanCode(els.stockCode.value);
   const market = inferMarket(code);
   const concepts = parseConceptInput(els.stockConcepts.value);
 
   if (!code) {
-    showToast("请输入股票代码");
+    showToast("请输入股票代码或名称");
     return;
   }
 
@@ -793,16 +799,6 @@ async function generateDailyUpdate(showMessage = true) {
       changePct: round(quote.changePct, 2)
     });
 
-    const concept = primaryConcept(stock) || "未填写概念";
-    const title = buildNewsTitle(stock, concept, quote.date || formatDate(new Date()));
-    upsertNews({
-      stockId: stock.id,
-      date: quote.date || formatDate(new Date()),
-      title,
-      source: "自用聚合",
-      url: `https://www.baidu.com/s?wd=${encodeURIComponent(`${stock.name} ${concept}`)}`,
-      summary: `${stock.name} 今日关联 ${concept}，需结合公告、板块表现和成交额进一步确认。`
-    });
     updated += 1;
   }
 
@@ -861,28 +857,17 @@ function syncConceptSnapshotForState(nextState) {
   );
 }
 
-function buildReports(showMessage = true) {
-  const today = formatDate(new Date());
-  const reports = [
-    {
-      id: `daily-${today}`,
-      type: "日报",
-      date: today,
-      content: buildReportContent("日报", today, "daily")
-    },
-    {
-      id: `weekly-${weekKey(new Date())}`,
-      type: "周报",
-      date: today,
-      content: buildReportContent("周报", today, "weekly")
-    },
-    {
-      id: `monthly-${today.slice(0, 7)}`,
-      type: "月报",
-      date: today,
-      content: buildReportContent("月报", today, "monthly")
-    }
-  ];
+function buildReports(showMessage = true, reportDate = new Date()) {
+  const todayDate = parseLocalDate(formatDate(reportDate));
+  const today = formatDate(todayDate);
+  const reports = reportScheduleForDate(todayDate).map((item) => ({
+    id: item.id,
+    type: item.type,
+    date: today,
+    content: buildReportContent(item.type, today, item.period)
+  }));
+
+  state.reports = state.reports.filter(isScheduledReport);
 
   reports.forEach((report) => {
     const existingIndex = state.reports.findIndex((item) => item.id === report.id);
@@ -892,7 +877,7 @@ function buildReports(showMessage = true) {
 
   saveState();
   render();
-  if (showMessage) showToast("报告已生成");
+  if (showMessage) showToast(`已生成${reports.map((report) => report.type).join("、")}`);
 }
 
 function buildReportContent(title, date, period) {
@@ -929,7 +914,6 @@ function render() {
   renderMetrics();
   renderStockTable();
   renderConcepts();
-  renderNews();
   renderStockCards();
   renderReports();
 }
@@ -947,7 +931,6 @@ function renderMetrics() {
   els.metricDaily.textContent = avg === null ? "-" : formatPct(avg);
   els.metricDaily.className = avg === null ? "" : avg >= 0 ? "positive" : "negative";
   els.metricConcept.textContent = hot ? hot.tag : "-";
-  els.metricNews.textContent = state.news.length;
 }
 
 function renderStockTable() {
@@ -987,35 +970,6 @@ function renderConcepts() {
   els.conceptList.innerHTML = items.length
     ? items.map((item, index) => `<span class="tag ${index === 0 ? "amber" : ""}">${escapeHtml(item.tag)} · ${item.count}</span>`).join("")
     : `<span class="muted">暂无概念</span>`;
-}
-
-function renderNews() {
-  const news = [...state.news]
-    .sort((a, b) => `${b.date}${b.id}`.localeCompare(`${a.date}${a.id}`))
-    .slice(0, 8);
-
-  els.newsList.innerHTML = news.length
-    ? news
-        .map((item) => {
-          const stock = state.stocks.find((entry) => entry.id === item.stockId);
-          const concepts = conceptsForStock(item.stockId)
-            .slice(0, 2)
-            .map((concept) => `<span>${escapeHtml(concept)}</span>`)
-            .join("");
-          return `
-            <article class="news-item">
-              <a href="${escapeAttr(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a>
-              <div class="news-meta">
-                <span>${escapeHtml(stock?.name || "未知股票")}</span>
-                <span>${item.date}</span>
-                <span>${escapeHtml(item.source)}</span>
-                ${concepts}
-              </div>
-            </article>
-          `;
-        })
-        .join("")
-    : `<div class="muted">暂无新闻</div>`;
 }
 
 function renderStockCards() {
@@ -1140,7 +1094,9 @@ function deleteStock(stockId) {
 }
 
 function renderReports() {
-  const reports = [...state.reports].sort((a, b) => `${b.date}${b.type}`.localeCompare(`${a.date}${a.type}`));
+  const reports = state.reports
+    .filter(isScheduledReport)
+    .sort((a, b) => `${b.date}${b.type}`.localeCompare(`${a.date}${a.type}`));
   els.reportList.innerHTML = reports.length
     ? reports
         .map(
@@ -1289,7 +1245,9 @@ function clearData() {
 }
 
 async function copyLatestReport() {
-  const latest = [...state.reports].sort((a, b) => b.date.localeCompare(a.date))[0];
+  const latest = state.reports
+    .filter(isScheduledReport)
+    .sort((a, b) => `${b.date}${b.type}`.localeCompare(`${a.date}${a.type}`))[0];
   if (!latest) {
     showToast("暂无报告");
     return;
@@ -1305,7 +1263,7 @@ function registerServiceWorker() {
 }
 
 function cleanCode(value) {
-  return value.trim().replace(/[^\d]/g, "").slice(0, 6);
+  return String(value || "").trim().replace(/[^\d]/g, "").slice(0, 6);
 }
 
 function inferMarket(value) {
@@ -1328,7 +1286,7 @@ function updateMarketPreview() {
   if (!els.marketPreview) return;
   const code = cleanCode(els.stockCode.value);
   const market = inferMarket(code);
-  els.marketPreview.textContent = market ? `${marketName(market)} · ${market}${code}` : "输入代码后识别";
+  els.marketPreview.textContent = market ? `${marketName(market)} · ${market}${code}` : "输入代码或名称后识别";
   els.marketPreview.classList.toggle("muted", !market);
 }
 
@@ -1340,13 +1298,13 @@ function handleStockCodeInput() {
   const market = inferMarket(code);
   if (!code || code.length < 6 || !market) {
     els.stockName.value = "";
-    els.stockName.placeholder = "输入代码后自动显示";
+    els.stockName.placeholder = "输入名称也可自动识别代码";
     return;
   }
 
   els.stockName.value = lookupStockNameFallback(code, market) || "";
   els.stockName.placeholder = "正在识别...";
-  stockLookupTimer = setTimeout(() => refreshStockNameFromCode(), 280);
+  stockLookupTimer = setTimeout(() => refreshStockNameFromCode(), STOCK_LOOKUP_DELAY_MS);
 }
 
 async function refreshStockNameFromCode() {
@@ -1361,7 +1319,7 @@ async function refreshStockNameFromCode() {
   const name = quote?.name || lookupStockNameFallback(code, market);
   if (name) {
     els.stockName.value = name;
-    els.stockName.placeholder = "输入代码后自动显示";
+    els.stockName.placeholder = "输入名称也可自动识别代码";
     els.marketPreview.textContent = `${marketName(market)} · ${market}${code} · ${name}`;
   } else {
     els.stockName.value = "";
@@ -1369,11 +1327,178 @@ async function refreshStockNameFromCode() {
   }
 }
 
+function handleStockNameInput() {
+  clearTimeout(stockNameLookupTimer);
+
+  const query = els.stockName.value.trim();
+  if (!query) return;
+
+  const codeLike = cleanCode(query);
+  if (codeLike.length === 6) {
+    els.stockCode.value = codeLike;
+    handleStockCodeInput();
+    return;
+  }
+
+  if (query.length < 2) return;
+
+  const localMatch = lookupStockByNameFallback(query);
+  if (localMatch && applyStockIdentity(localMatch)) return;
+
+  if (!cleanCode(els.stockCode.value)) {
+    els.marketPreview.textContent = "正在按名称识别...";
+    els.marketPreview.classList.remove("muted");
+  }
+  stockNameLookupTimer = setTimeout(() => refreshStockCodeFromName(), STOCK_LOOKUP_DELAY_MS);
+}
+
+async function refreshStockCodeFromName(silent = false) {
+  const query = els.stockName.value.trim();
+  if (!query) return null;
+
+  const codeLike = cleanCode(query);
+  if (codeLike.length === 6) {
+    els.stockCode.value = codeLike;
+    await refreshStockNameFromCode();
+    return { code: codeLike, market: inferMarket(codeLike), name: els.stockName.value.trim() };
+  }
+
+  if (query.length < 2) return null;
+
+  const localMatch = lookupStockByNameFallback(query);
+  if (localMatch && applyStockIdentity(localMatch)) return localMatch;
+
+  const requestId = ++stockNameLookupRequestId;
+  if (!silent) {
+    els.marketPreview.textContent = "正在按名称识别...";
+    els.marketPreview.classList.remove("muted");
+  }
+
+  const remoteMatch = await fetchStockSearch(query).catch(() => null);
+  if (requestId !== stockNameLookupRequestId || els.stockName.value.trim() !== query) return null;
+  if (remoteMatch && applyStockIdentity(remoteMatch)) return remoteMatch;
+
+  if (!cleanCode(els.stockCode.value)) {
+    els.marketPreview.textContent = "未识别名称，请输入代码";
+    els.marketPreview.classList.add("muted");
+  }
+  return null;
+}
+
 function lookupStockNameFallback(code, market) {
   const existing = state.stocks.find((stock) => stock.code === code && stock.market === market);
   if (existing?.name) return existing.name;
   const sample = sampleStocks.find((stock) => stock.code === code && stock.market === market);
   return sample?.name || "";
+}
+
+function lookupStockByNameFallback(value) {
+  const query = normalizeStockSearchText(value);
+  if (!query) return null;
+
+  const candidates = [...state.stocks, ...sampleStocks].filter((stock) => stock?.name && stock?.code);
+  const exact = candidates.find((stock) => normalizeStockSearchText(stock.name) === query);
+  if (exact) return exact;
+
+  return candidates.find((stock) => {
+    const name = normalizeStockSearchText(stock.name);
+    return name.includes(query) || query.includes(name);
+  }) || null;
+}
+
+function applyStockIdentity(stock) {
+  const code = cleanCode(stock?.code || "");
+  const market = stock?.market || inferMarket(code);
+  if (code.length !== 6 || !market) return false;
+
+  const name = String(stock?.name || "").trim();
+  els.stockCode.value = code;
+  if (name) els.stockName.value = name;
+  els.stockName.placeholder = "输入名称也可自动识别代码";
+  els.marketPreview.textContent = `${marketName(market)} · ${market}${code}${name ? ` · ${name}` : ""}`;
+  els.marketPreview.classList.remove("muted");
+  return true;
+}
+
+function normalizeStockSearchText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[()（）【】\[\]{}]/g, "");
+}
+
+function fetchStockSearch(value) {
+  const query = String(value || "").trim();
+  if (query.length < 2) return Promise.resolve(null);
+
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    let settled = false;
+
+    const cleanup = () => {
+      script.remove();
+      clearTimeout(timer);
+      try {
+        delete globalThis.v_hint;
+      } catch {
+        globalThis.v_hint = undefined;
+      }
+    };
+
+    const done = (callback, result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback(result);
+    };
+
+    const timer = setTimeout(() => done(reject, new Error("Stock search timeout")), 8000);
+    globalThis.v_hint = "";
+    script.charset = "gbk";
+    script.src = `https://smartbox.gtimg.cn/s3/?q=${encodeURIComponent(query)}&t=gp&_=${Date.now()}`;
+    script.onload = () => {
+      const match = pickStockSearchResult(parseTencentSearch(globalThis.v_hint), query);
+      if (match) done(resolve, match);
+      else done(reject, new Error("Stock search empty"));
+    };
+    script.onerror = () => done(reject, new Error("Stock search network error"));
+    document.head.appendChild(script);
+  });
+}
+
+function parseTencentSearch(raw) {
+  return String(raw || "")
+    .split("^")
+    .map((item) => item.split("~"))
+    .map(([marketText, code, name]) => {
+      const normalizedCode = cleanCode(code || "");
+      const market = marketFromSearch(marketText) || inferMarket(normalizedCode);
+      return {
+        code: normalizedCode,
+        market,
+        name: String(name || "").trim()
+      };
+    })
+    .filter((item) => item.code.length === 6 && item.market && item.name);
+}
+
+function pickStockSearchResult(results, query) {
+  const normalizedQuery = normalizeStockSearchText(query);
+  const aShareResults = results.filter((item) => item.market === inferMarket(item.code));
+  const candidates = aShareResults.length ? aShareResults : results;
+  return candidates.find((item) => normalizeStockSearchText(item.name) === normalizedQuery) ||
+    candidates.find((item) => normalizeStockSearchText(item.name).includes(normalizedQuery)) ||
+    candidates[0] ||
+    null;
+}
+
+function marketFromSearch(value) {
+  const market = String(value || "").trim().toLowerCase();
+  if (market === "sh") return "SH";
+  if (market === "sz") return "SZ";
+  if (market === "bj") return "BJ";
+  return "";
 }
 
 function fetchStockQuote(codeValue, marketValue) {
@@ -1454,9 +1579,46 @@ function formatClock(date) {
   return date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
 }
 
+function reportScheduleForDate(date) {
+  const day = parseLocalDate(formatDate(date));
+  const dayText = formatDate(day);
+  return [{ id: `daily-${dayText}`, type: "日报", period: "daily" }];
+}
+
+function isScheduledReport(report) {
+  return report?.type === "日报" && Boolean(report?.date);
+}
+
+function isTradingDay(date) {
+  const day = date.getDay();
+  return day >= 1 && day <= 5 && !MARKET_HOLIDAYS.has(formatDate(date));
+}
+
+function nextTradingDay(date) {
+  const probe = parseLocalDate(formatDate(date));
+  for (let index = 0; index < 14; index += 1) {
+    probe.setDate(probe.getDate() + 1);
+    if (isTradingDay(probe)) return probe;
+  }
+  return probe;
+}
+
+function isLastTradingDayOfWeek(date) {
+  return isTradingDay(date) && weekKey(nextTradingDay(date)) !== weekKey(date);
+}
+
+function isLastTradingDayOfMonth(date) {
+  return isTradingDay(date) && nextTradingDay(date).getMonth() !== date.getMonth();
+}
+
+function parseLocalDate(value) {
+  const [year, month, day] = String(value || "").slice(0, 10).split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
 function stateSummary(value) {
   const data = normalizeState(value);
-  return `股票${data.stocks.length} 行情${data.prices.length} 新闻${data.news.length}`;
+  return `股票${data.stocks.length} 行情${data.prices.length}`;
 }
 
 function formatDate(date) {

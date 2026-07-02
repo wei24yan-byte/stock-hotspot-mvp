@@ -105,6 +105,7 @@ async function loadState() {
   const fallback = emptyState();
   loadSupabaseForm();
   const localState = loadLocalState();
+  const hasSupabaseConfig = Boolean(getSupabaseConfig());
 
   const cloudState = await loadSupabaseState();
   if (cloudState && localState) {
@@ -118,6 +119,10 @@ async function loadState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudState));
     updateSupabaseStatus(`已读取云端：${stateSummary(cloudState)}`);
     return cloudState;
+  }
+  if (localState) {
+    updateSupabaseStatus(hasSupabaseConfig ? "云端暂不可用，已保留本机数据" : "本机存储");
+    return localState;
   }
 
   try {
@@ -139,7 +144,6 @@ async function loadState() {
     // Static hosting may not have a seeded data file yet.
   }
 
-  if (localState) return localState;
   return fallback;
 }
 

@@ -441,7 +441,7 @@ function normalizeState(value) {
     news: Array.isArray(value?.news) ? value.news : [],
     concepts: legacyConcepts,
     reports: Array.isArray(value?.reports) ? value.reports : [],
-    deletedStocks: deletedStocks.map(normalizeDeletedStock).filter((item) => item.id || item.code),
+    deletedStocks: dedupeDeletedStocks(deletedStocks).filter((item) => item.id || item.code),
     syncMeta: value?.syncMeta && typeof value.syncMeta === "object" ? value.syncMeta : {}
   };
   return applyDeletedStocks(normalized);
@@ -476,6 +476,7 @@ function normalizeStock(stock, legacyConcepts = []) {
     name: String(stock?.name || "").trim(),
     market: inferMarket(stock?.code || "") || stock?.market || "SH",
     addedAt: stock?.addedAt || stock?.added_at || formatDate(new Date()),
+    updatedAt: stock?.updatedAt || stock?.updated_at || stock?.addedAt || stock?.added_at || formatDate(new Date()),
     active: stock?.active !== false,
     pinned: stock?.pinned === true,
     concepts
@@ -487,28 +488,27 @@ function normalizeDeletedStock(item) {
     id: String(item?.id || ""),
     code: cleanCode(item?.code || ""),
     market: item?.market || inferMarket(item?.code || ""),
-    deletedAt: item?.deletedAt || formatDate(new Date())
+    deletedAt: item?.deletedAt || item?.deleted_at || formatDate(new Date())
   };
 }
 
 function mergeStates(primary, secondary, options = {}) {
   const base = normalizeState(primary);
   const incoming = normalizeState(secondary);
-  const incomingStockKeys = new Set(incoming.stocks.flatMap((stock) => [stock.id, `${stock.market}-${stock.code}`]));
   const primaryDeletedStocks = options.keepIncomingStocksOverPrimaryDeletes
-    ? base.deletedStocks.filter((item) => !stockDeleteKeys(item).some((key) => incomingStockKeys.has(key)))
+    ? base.deletedStocks.filter((record) => {
+        const matchingIncomingStock = incoming.stocks.find((stock) => deleteRecordAppliesToStock(record, stock));
+        return !matchingIncomingStock || stockChangeTime(matchingIncomingStock) <= deletedStockTime(record);
+      })
     : base.deletedStocks;
-  const deletedStocks = dedupeBy(
-    [...primaryDeletedStocks, ...incoming.deletedStocks],
-    (item) => `${item.id || ""}|${item.market || ""}|${item.code || ""}`
+  const deletedStocks = dedupeDeletedStocks(
+    [...primaryDeletedStocks, ...incoming.deletedStocks]
   );
-  const deletedKeys = new Set(deletedStocks.flatMap((item) => stockDeleteKeys(item)));
   const idMap = new Map();
   const stocks = [];
 
   [...base.stocks, ...incoming.stocks].forEach((stock) => {
-    const key = `${stock.market}-${stock.code}`;
-    if (deletedKeys.has(stock.id) || deletedKeys.has(key)) return;
+    if (deletedStocks.some((record) => deleteRecordAppliesToStock(record, stock) && deletedStockTime(record) >= stockChangeTime(stock))) return;
     const existing = stocks.find((item) => item.market === stock.market && item.code === stock.code);
     if (!existing) {
       stocks.push({ ...stock, concepts: normalizeConceptList(stock.concepts) });
@@ -539,9 +539,8 @@ function mergeStates(primary, secondary, options = {}) {
 function mergeCloudIntoLocal(localState, cloudState) {
   const cloud = normalizeState(cloudState);
   const merged = mergeStates(localState, cloud, { keepIncomingStocksOverPrimaryDeletes: true });
-  merged.deletedStocks = dedupeBy(
-    [...(merged.deletedStocks || []), ...(cloud.deletedStocks || [])],
-    deleteRecordKey
+  merged.deletedStocks = dedupeDeletedStocks(
+    [...(merged.deletedStocks || []), ...(cloud.deletedStocks || [])]
   );
   return applyDeletedStocks(merged);
 }
@@ -553,35 +552,61 @@ function remapStockRef(item, idMap) {
 }
 
 function applyDeletedStocks(nextState) {
-  const deletedKeys = new Set((nextState.deletedStocks || []).flatMap((item) => stockDeleteKeys(item)));
-  const stocks = (nextState.stocks || []).filter((stock) => {
-    const key = `${stock.market}-${stock.code}`;
-    return !deletedKeys.has(stock.id) && !deletedKeys.has(key) && !deletedKeys.has(codeDeleteKey(stock.code));
-  });
+  const deletedStocks = dedupeDeletedStocks(nextState.deletedStocks || []);
+  const stocks = (nextState.stocks || []).filter(
+    (stock) => !deletedStocks.some((record) => deleteRecordAppliesToStock(record, stock) && deletedStockTime(record) >= stockChangeTime(stock))
+  );
+  const activeDeletedStocks = deletedStocks.filter(
+    (record) => !stocks.some((stock) => deleteRecordAppliesToStock(record, stock) && stockChangeTime(stock) > deletedStockTime(record))
+  );
   const stockIds = new Set(stocks.map((stock) => stock.id));
   return {
     ...nextState,
     stocks,
+    deletedStocks: activeDeletedStocks,
     prices: (nextState.prices || []).filter((price) => stockIds.has(price.stockId)),
     news: (nextState.news || []).filter((item) => stockIds.has(item.stockId)),
     concepts: (nextState.concepts || []).filter((item) => stockIds.has(item.stockId))
   };
 }
 
-function stockDeleteKeys(item) {
-  const keys = [];
-  if (item?.id) keys.push(item.id);
-  if (item?.code && item?.market) keys.push(`${item.market}-${item.code}`);
-  if (item?.code) keys.push(codeDeleteKey(item.code));
-  return keys;
+function deleteRecordAppliesToStock(record, stock) {
+  if (!record || !stock) return false;
+  if (record.id && stock.id && record.id === stock.id) return true;
+  if (record.code && stock.code && cleanCode(record.code) === cleanCode(stock.code)) return true;
+  if (record.code && record.market && stock.code && stock.market) {
+    return `${record.market}-${cleanCode(record.code)}` === `${stock.market}-${cleanCode(stock.code)}`;
+  }
+  return false;
 }
 
-function codeDeleteKey(code) {
-  return `CODE-${cleanCode(code || "")}`;
+function stockChangeTime(stock) {
+  return timestampValue(stock?.updatedAt || stock?.updated_at || stock?.addedAt || stock?.added_at);
+}
+
+function deletedStockTime(record) {
+  return timestampValue(record?.deletedAt || record?.deleted_at);
+}
+
+function timestampValue(value) {
+  const time = Date.parse(String(value || ""));
+  return Number.isFinite(time) ? time : 0;
 }
 
 function deleteRecordKey(item) {
   return `${item.id || ""}|${item.market || ""}|${item.code || ""}`;
+}
+
+function dedupeDeletedStocks(items) {
+  const map = new Map();
+  items.filter(Boolean).forEach((item) => {
+    const record = normalizeDeletedStock(item);
+    if (!record.id && !record.code) return;
+    const key = deleteRecordKey(record);
+    const existing = map.get(key);
+    if (!existing || deletedStockTime(record) >= deletedStockTime(existing)) map.set(key, record);
+  });
+  return [...map.values()];
 }
 
 function dedupeBy(items, keyFn) {
@@ -612,6 +637,7 @@ function canonicalState(value) {
         name: stock.name,
         active: stock.active !== false,
         pinned: stock.pinned === true,
+        updatedAt: stock.updatedAt || "",
         concepts: normalizeConceptList(stock.concepts).sort((a, b) => a.localeCompare(b))
       }))
       .sort((a, b) => a.key.localeCompare(b.key)),
@@ -644,7 +670,8 @@ function canonicalState(value) {
         key: `${item.id || ""}|${item.market || ""}|${item.code || ""}`,
         id: item.id || "",
         code: item.code || "",
-        market: item.market || ""
+        market: item.market || "",
+        deletedAt: item.deletedAt || ""
       }))
       .sort((a, b) => a.key.localeCompare(b.key))
   };
@@ -728,16 +755,20 @@ async function addStockFromForm() {
     return;
   }
 
-  state.stocks.unshift({
+  const nextStock = {
     id: makeId(),
     code,
     name,
     market,
     concepts,
     addedAt: formatDate(new Date()),
+    updatedAt: new Date().toISOString(),
     active: true,
     pinned: false
-  });
+  };
+
+  state.deletedStocks = (state.deletedStocks || []).filter((record) => !deleteRecordAppliesToStock(record, nextStock));
+  state.stocks.unshift(nextStock);
 
   els.stockCode.value = "";
   els.stockName.value = "";
@@ -762,6 +793,7 @@ async function seedSamples() {
         market: item.market,
         concepts: normalizeConceptList(item.concepts),
         addedAt: formatDate(new Date()),
+        updatedAt: new Date().toISOString(),
         active: true,
         pinned: false
       });
@@ -792,6 +824,7 @@ async function generateDailyUpdate(showMessage = true) {
     }
 
     if (quote.name && quote.name !== stock.name) stock.name = quote.name;
+    stock.updatedAt = new Date().toISOString();
     upsertPrice({
       stockId: stock.id,
       date: quote.date || formatDate(new Date()),
@@ -1018,6 +1051,7 @@ function renderStockCards() {
       const stock = state.stocks.find((item) => item.id === button.dataset.stockId);
       if (!stock) return;
       stock.active = !stock.active;
+      stock.updatedAt = new Date().toISOString();
       saveState();
       render();
       showToast(stock.active ? "已启用" : "已停用");
@@ -1029,12 +1063,12 @@ function renderStockCards() {
   });
 
   els.stockCards.querySelectorAll("[data-action='delete']").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       const stock = state.stocks.find((item) => item.id === button.dataset.stockId);
       if (!stock) return;
       if (!confirm(`确认删除 ${stock.name} 吗？相关行情、新闻和概念记录也会一起删除。`)) return;
-      deleteStock(stock.id);
-      showToast("已删除");
+      const syncResult = await deleteStock(stock.id);
+      showToast(syncResult === true ? "已删除并同步" : "已删除，等待自动同步");
     });
   });
 
@@ -1044,6 +1078,7 @@ function renderStockCards() {
       const input = els.stockCards.querySelector(`[data-concept-input="${button.dataset.stockId}"]`);
       if (!stock || !input) return;
       stock.concepts = parseConceptInput(input.value);
+      stock.updatedAt = new Date().toISOString();
       syncConceptSnapshot();
       buildReports(false);
       saveState();
@@ -1061,25 +1096,25 @@ function togglePinnedStock(stockId) {
   const stock = state.stocks.find((item) => item.id === stockId);
   if (!stock) return;
   stock.pinned = stock.pinned !== true;
+  stock.updatedAt = new Date().toISOString();
   saveState();
   render();
   showToast(stock.pinned ? "已置顶" : "已取消置顶");
 }
 
-function deleteStock(stockId) {
+async function deleteStock(stockId) {
   const stock = state.stocks.find((item) => item.id === stockId);
   if (stock) {
-    state.deletedStocks = dedupeBy(
+    state.deletedStocks = dedupeDeletedStocks(
       [
         ...(state.deletedStocks || []),
         {
           id: stock.id,
           code: stock.code,
           market: stock.market,
-          deletedAt: formatDate(new Date())
+          deletedAt: new Date().toISOString()
         }
-      ],
-      deleteRecordKey
+      ]
     );
   }
   state.stocks = state.stocks.filter((stock) => stock.id !== stockId);
@@ -1089,8 +1124,18 @@ function deleteStock(stockId) {
   syncConceptSnapshot();
   buildReports(false);
   saveState();
-  queueSupabaseSync(0);
+  cancelQueuedSupabaseSync();
   render();
+  if (!getSupabaseConfig()) return null;
+  updateSupabaseStatus("删除上传中");
+  const ok = await runSupabaseSave(currentStateSnapshot);
+  if (ok) {
+    updateSupabaseStatus(`已删除并同步 ${formatClock(new Date())} · ${stateSummary(state)}`);
+  } else {
+    updateSupabaseStatus("删除已保留，自动同步稍后重试");
+    queueSupabaseSync(AUTO_SYNC_RETRY_MS);
+  }
+  return ok;
 }
 
 function renderReports() {

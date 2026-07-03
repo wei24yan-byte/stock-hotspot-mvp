@@ -48,6 +48,7 @@ function bindElements() {
   [
     "todayLabel",
     "refreshBtn",
+    "todayStockList",
     "stockCode",
     "stockName",
     "marketPreview",
@@ -517,12 +518,17 @@ function mergeStates(primary, secondary, options = {}) {
       return;
     }
     idMap.set(stock.id, existing.id);
+    const existingUpdatedTime = timestampValue(existing.updatedAt);
+    const stockUpdatedTime = timestampValue(stock.updatedAt);
+    const stockIsNewer = stockUpdatedTime > existingUpdatedTime;
     existing.name = existing.name || stock.name;
     existing.addedAt = existing.addedAt <= stock.addedAt ? existing.addedAt : stock.addedAt;
     existing.createdAt = timestampValue(existing.createdAt) <= timestampValue(stock.createdAt) ? existing.createdAt : stock.createdAt;
-    existing.updatedAt = timestampValue(existing.updatedAt) >= timestampValue(stock.updatedAt) ? existing.updatedAt : stock.updatedAt;
-    existing.active = existing.active !== false && stock.active !== false;
-    existing.pinned = existing.pinned === true || stock.pinned === true;
+    existing.updatedAt = existingUpdatedTime >= stockUpdatedTime ? existing.updatedAt : stock.updatedAt;
+    if (stockIsNewer) {
+      existing.active = stock.active !== false;
+      existing.pinned = stock.pinned === true;
+    }
     existing.concepts = normalizeConceptList([...(existing.concepts || []), ...(stock.concepts || [])]);
   });
 
@@ -952,11 +958,50 @@ function buildReportContent(title, date, period) {
 }
 
 function render() {
+  renderTodayList();
   renderMetrics();
   renderStockTable();
   renderConcepts();
   renderStockCards();
   renderReports();
+}
+
+function renderTodayList() {
+  if (!els.todayStockList) return;
+  els.todayStockList.innerHTML = state.stocks.length
+    ? orderedStocks()
+        .map((stock) => {
+          const latest = latestPrice(stock.id);
+          const changeClass = latest?.changePct === undefined || latest?.changePct === null ? "" : Number(latest.changePct) >= 0 ? "positive" : "negative";
+          const concepts = conceptsForStock(stock.id).slice(0, 2);
+          return `
+            <article class="today-stock-row">
+              <div class="today-stock-name">
+                <strong>${escapeHtml(stock.name)}</strong>
+                <span>${stock.market}${stock.code}</span>
+              </div>
+              <div class="today-stock-value">
+                <span>最新价</span>
+                <strong>${latest ? formatNumber(latest.close) : "-"}</strong>
+              </div>
+              <div class="today-stock-value ${changeClass}">
+                <span>今日</span>
+                <strong>${latest ? formatPct(latest.changePct) : "-"}</strong>
+              </div>
+              <div class="today-stock-concepts">
+                <span>概念</span>
+                <div>${concepts.length ? concepts.map((tag) => `<em>${escapeHtml(tag)}</em>`).join("") : '<strong class="muted">-</strong>'}</div>
+              </div>
+              <button class="today-pin-button ${stock.pinned ? "active" : ""}" data-action="pin-today" data-stock-id="${stock.id}" title="${stock.pinned ? "取消置顶" : "置顶"}" aria-label="${stock.pinned ? "取消置顶" : "置顶"}">${stock.pinned ? "取消" : "置顶"}</button>
+            </article>
+          `;
+        })
+        .join("")
+    : `<div class="empty-state inline-empty show">暂无股票</div>`;
+
+  els.todayStockList.querySelectorAll("[data-action='pin-today']").forEach((button) => {
+    button.addEventListener("click", () => togglePinnedStock(button.dataset.stockId));
+  });
 }
 
 function renderMetrics() {
@@ -984,8 +1029,7 @@ function renderStockTable() {
     const tags = conceptsForStock(stock.id).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
     row.innerHTML = `
       <td data-label="股票">
-        <div class="stock-title">
-          <button class="pin-button ${stock.pinned ? "active" : ""}" data-action="pin" data-stock-id="${stock.id}" title="${stock.pinned ? "取消置顶" : "置顶"}" aria-label="${stock.pinned ? "取消置顶" : "置顶"}">${stock.pinned ? "★" : "☆"}</button>
+        <div class="stock-title stock-title-plain">
           <strong>${escapeHtml(stock.name)}</strong>
           <span>${stock.market}${stock.code}</span>
         </div>
@@ -1001,9 +1045,6 @@ function renderStockTable() {
     els.stockTableBody.appendChild(row);
   });
 
-  els.stockTableBody.querySelectorAll("[data-action='pin']").forEach((button) => {
-    button.addEventListener("click", () => togglePinnedStock(button.dataset.stockId));
-  });
 }
 
 function renderConcepts() {
@@ -1031,7 +1072,6 @@ function renderStockCards() {
                 </div>
                 <div class="stock-actions">
                   <button class="ghost-button" data-action="toggle" data-stock-id="${stock.id}">${stock.active ? "停用" : "启用"}</button>
-                  <button class="ghost-button" data-action="pin" data-stock-id="${stock.id}">${stock.pinned ? "取消置顶" : "置顶"}</button>
                   <button class="danger-button" data-action="delete" data-stock-id="${stock.id}">删除</button>
                 </div>
               </div>
@@ -1064,10 +1104,6 @@ function renderStockCards() {
       render();
       showToast(stock.active ? "已启用" : "已停用");
     });
-  });
-
-  els.stockCards.querySelectorAll("[data-action='pin']").forEach((button) => {
-    button.addEventListener("click", () => togglePinnedStock(button.dataset.stockId));
   });
 
   els.stockCards.querySelectorAll("[data-action='delete']").forEach((button) => {

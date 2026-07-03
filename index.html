@@ -6,30 +6,29 @@
     <meta name="theme-color" content="#f7f8fa" />
     <title>热点股票台账</title>
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./styles.css?v=14" />
+    <link rel="stylesheet" href="./styles.css?v=58" />
   </head>
   <body>
     <div class="app-shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">免费自用版</p>
-          <h1>热点股票台账</h1>
-        </div>
-        <div class="topbar-actions">
-          <span class="status-pill" id="todayLabel"></span>
-          <button class="icon-button" id="refreshBtn" title="更新真实行情" aria-label="更新真实行情">↻</button>
-        </div>
-      </header>
-
       <nav class="tabs" aria-label="视图">
-        <button class="tab active" data-view="dashboard">总览</button>
+        <button class="tab active" data-view="today">今日</button>
+        <button class="tab" data-view="dashboard">总览</button>
         <button class="tab" data-view="stocks">股票</button>
         <button class="tab" data-view="reports">报告</button>
-        <button class="tab" data-view="settings">数据</button>
       </nav>
 
       <main>
-        <section id="dashboardView" class="view active">
+        <section id="todayView" class="view active">
+          <section class="panel today-panel">
+            <button class="today-refresh" id="refreshBtn" type="button" title="点击刷新行情" aria-label="点击今日日期刷新行情">
+              <span id="todayLabel"></span>
+              <span class="refresh-symbol">↻</span>
+            </button>
+            <div class="today-stock-list" id="todayStockList"></div>
+          </section>
+        </section>
+
+        <section id="dashboardView" class="view">
           <div class="metric-grid">
             <article class="metric-card">
               <span>关注股票</span>
@@ -70,12 +69,13 @@
               <div class="empty-state" id="stockEmpty">暂无股票</div>
             </section>
 
-            <section class="panel">
+            <section class="panel wide-panel">
               <div class="panel-head">
-                <h2>手动概念聚合</h2>
+                <h2>概念聚合</h2>
               </div>
               <div id="conceptList" class="concept-list"></div>
             </section>
+
           </div>
         </section>
 
@@ -108,18 +108,8 @@
               <div id="stockCards" class="stock-card-list"></div>
             </section>
           </div>
-        </section>
 
-        <section id="reportsView" class="view">
-          <div class="report-toolbar">
-            <button class="primary-button" id="buildReportsBtn">生成报告</button>
-            <button class="ghost-button" id="copyReportBtn">复制最新报告</button>
-          </div>
-          <div id="reportList" class="report-list"></div>
-        </section>
-
-        <section id="settingsView" class="view">
-          <div class="split-grid">
+          <div class="split-grid stock-data-tools">
             <section class="panel wide-panel">
               <div class="panel-head">
                 <h2>云端同步</h2>
@@ -163,10 +153,23 @@
             </section>
           </div>
         </section>
+
+        <section id="reportsView" class="view">
+          <section class="panel wide-panel">
+            <div class="panel-head">
+              <h2>报告</h2>
+              <div class="report-toolbar">
+                <button class="primary-button" id="buildReportsBtn">生成日报</button>
+                <button class="ghost-button" id="copyReportBtn">复制最新报告</button>
+              </div>
+            </div>
+            <div id="reportList" class="report-list"></div>
+          </section>
+        </section>
       </main>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=36"></script>
+    <script src="./app.js?v=58"></script>
   </body>
 </html>

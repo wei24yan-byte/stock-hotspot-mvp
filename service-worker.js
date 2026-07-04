@@ -1,4 +1,5 @@
 const CACHE_NAME = "stock-hotspot-mvp-v58";
+// pages redeploy: v58 app.js sync fix 2026-07-04T00:26:19Z
 const ASSETS = [
   "./",
   "./index.html",

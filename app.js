@@ -713,8 +713,7 @@ function getClientId() {
 }
 
 function setDefaultDates() {
-  const today = formatDate(new Date());
-  els.todayLabel.textContent = today;
+  els.todayLabel.textContent = formatDateWithWeekday(new Date());
   updateMarketPreview();
 }
 
@@ -907,7 +906,19 @@ function syncConceptSnapshotForState(nextState) {
 function buildReports(showMessage = true, reportDate = new Date()) {
   const todayDate = parseLocalDate(formatDate(reportDate));
   const today = formatDate(todayDate);
-  const reports = reportScheduleForDate(todayDate).map((item) => ({
+  const schedule = reportScheduleForDate(todayDate);
+
+  if (!schedule.length) {
+    if (showMessage) showToast(`${today} 非交易日，不生成日报`);
+    return;
+  }
+
+  if (!state.prices.some((price) => price.date === today)) {
+    if (showMessage) showToast(`${today} 暂无当日行情，不生成日报`);
+    return;
+  }
+
+  const reports = schedule.map((item) => ({
     id: item.id,
     type: item.type,
     date: today,
@@ -1671,6 +1682,7 @@ function formatClock(date) {
 function reportScheduleForDate(date) {
   const day = parseLocalDate(formatDate(date));
   const dayText = formatDate(day);
+  if (!isTradingDay(day)) return [];
   return [{ id: `daily-${dayText}`, type: "日报", period: "daily" }];
 }
 
@@ -1716,6 +1728,12 @@ function formatDate(date) {
   const month = `${d.getMonth() + 1}`.padStart(2, "0");
   const day = `${d.getDate()}`.padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function formatDateWithWeekday(date) {
+  const weekdays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
+  const d = new Date(date);
+  return `${formatDate(d)} ${weekdays[d.getDay()]}`;
 }
 
 function weekKey(date) {

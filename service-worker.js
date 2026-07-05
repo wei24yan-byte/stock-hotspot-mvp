@@ -1,5 +1,5 @@
-const CACHE_NAME = "stock-hotspot-mvp-v59";
-// pages redeploy: refresh old v58 app cache 2026-07-04T00:26:19Z
+const CACHE_NAME = "stock-hotspot-mvp-v60";
+// pages redeploy: force refresh old v58/v59 app cache 2026-07-05
 const ASSETS = [
   "./",
   "./index.html",

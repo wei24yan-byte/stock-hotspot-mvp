@@ -6,19 +6,19 @@
     <meta name="theme-color" content="#f7f8fa" />
     <title>热点股票台账</title>
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./styles.css?v=61" />
+    <link rel="stylesheet" href="./styles.css?v=62" />
   </head>
   <body>
     <div class="app-shell">
       <nav class="tabs" aria-label="视图">
-        <button class="tab active" data-view="today">今日</button>
-        <button class="tab" data-view="dashboard">总览</button>
+        <button class="tab active" data-view="dashboard">总览</button>
+        <button class="tab" data-view="today">今日</button>
         <button class="tab" data-view="stocks">股票</button>
         <button class="tab" data-view="reports">报告</button>
       </nav>
 
       <main>
-        <section id="todayView" class="view active">
+        <section id="todayView" class="view">
           <section class="panel today-panel">
             <button class="today-refresh" id="refreshBtn" type="button" title="点击刷新行情" aria-label="点击今日日期刷新行情">
               <span id="todayLabel"></span>
@@ -28,7 +28,7 @@
           </section>
         </section>
 
-        <section id="dashboardView" class="view">
+        <section id="dashboardView" class="view active">
           <div class="metric-grid">
             <article class="metric-card">
               <span>关注股票</span>
@@ -170,6 +170,6 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=61"></script>
+    <script src="./app.js?v=62"></script>
   </body>
 </html>

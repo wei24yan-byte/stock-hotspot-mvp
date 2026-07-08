@@ -1,9 +1,16 @@
 {
-  "name": "热点股票台账",
-  "short_name": "股票台账",
+  "name": "Market Radar",
+  "short_name": "Market Radar",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#f7f8fa",
   "theme_color": "#f7f8fa",
-  "icons": []
+  "icons": [
+    {
+      "src": "./assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
 }

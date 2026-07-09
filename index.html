@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f7f8fa" />
     <title>Market Radar</title>
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./styles.css?v=75" />
+    <link rel="stylesheet" href="./styles.css?v=63" />
   </head>
   <body>
     <div class="app-shell">
@@ -46,20 +46,26 @@
 
           <div class="dashboard-grid">
             <section class="panel wide-panel">
-              <div class="dashboard-stock-head">
+              <div class="panel-head">
                 <h2>股票池</h2>
               </div>
-              <div class="dashboard-stock-header" aria-hidden="true">
-                <span>股票</span>
-                <span>添加日</span>
-                <span>最新价</span>
-                <span>添加以来</span>
-                <span>今日</span>
-                <span>周</span>
-                <span>月</span>
-                <span>概念</span>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>股票</th>
+                      <th>添加日</th>
+                      <th>最新价</th>
+                      <th>添加以来</th>
+                      <th>今日</th>
+                      <th>周</th>
+                      <th>月</th>
+                      <th>概念</th>
+                    </tr>
+                  </thead>
+                  <tbody id="stockTableBody"></tbody>
+                </table>
               </div>
-              <div id="stockTableBody" class="dashboard-stock-list"></div>
               <div class="empty-state" id="stockEmpty">暂无股票</div>
             </section>
 
@@ -164,6 +170,6 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=75"></script>
+    <script src="./app.js?v=63"></script>
   </body>
 </html>

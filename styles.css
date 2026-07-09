@@ -437,6 +437,115 @@ select:focus {
   margin-bottom: 12px;
 }
 
+.dashboard-stock-list {
+  display: grid;
+  gap: 0;
+}
+
+.dashboard-stock-head {
+  margin-bottom: 18px;
+}
+
+.dashboard-stock-head h2 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.dashboard-stock-header {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.45fr) minmax(96px, 1fr) minmax(82px, 0.9fr) minmax(104px, 1fr) minmax(78px, 0.8fr) minmax(70px, 0.7fr) minmax(70px, 0.7fr) minmax(190px, 2.3fr);
+  gap: 16px;
+  padding: 10px 18px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.dashboard-stock-card {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.45fr) minmax(96px, 1fr) minmax(82px, 0.9fr) minmax(104px, 1fr) minmax(78px, 0.8fr) minmax(70px, 0.7fr) minmax(70px, 0.7fr) minmax(190px, 2.3fr);
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  padding: 18px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.dashboard-stock-main {
+  display: block;
+  min-width: 0;
+}
+
+.dashboard-stock-title {
+  min-height: 0;
+  gap: 1px;
+}
+
+.dashboard-stock-added-mobile {
+  display: none;
+}
+
+.dashboard-stock-tags {
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.dashboard-stock-tags-mobile {
+  display: none;
+}
+
+.dashboard-stock-stats {
+  display: contents;
+}
+
+.dashboard-stock-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.dashboard-stock-stats em {
+  display: none;
+}
+
+.dashboard-stock-stats em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.dashboard-stock-stat > strong {
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard-stock-concepts {
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.dashboard-stock-tags-desktop {
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.dashboard-stock-tags-desktop .tag {
+  min-height: 24px;
+  padding: 0 8px;
+}
+
 .table-wrap {
   overflow-x: visible;
 }
@@ -548,6 +657,10 @@ td:nth-child(8) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.tag-row.dashboard-stock-tags-mobile {
+  display: none;
 }
 
 .tag {
@@ -787,6 +900,115 @@ td:nth-child(8) {
 
   .wide-panel {
     grid-row: auto;
+  }
+
+  .dashboard-stock-head,
+  .dashboard-stock-header {
+    display: none;
+  }
+
+  .dashboard-stock-list {
+    gap: 8px;
+  }
+
+  .dashboard-stock-card {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+  }
+
+  .dashboard-stock-main {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .dashboard-stock-title {
+    display: inline-flex;
+    align-items: baseline;
+    min-width: 0;
+    min-height: 0;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .stock-title.dashboard-stock-title {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .dashboard-stock-title strong,
+  .dashboard-stock-title span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .dashboard-stock-added-mobile {
+    display: none;
+  }
+
+  .dashboard-stock-added-mobile em {
+    color: var(--muted);
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 650;
+  }
+
+  .dashboard-stock-added-mobile strong {
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .dashboard-stock-tags {
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .tag-row.dashboard-stock-tags-mobile {
+    display: flex;
+  }
+
+  .dashboard-stock-concepts {
+    display: none;
+  }
+
+  .dashboard-stock-tags .tag {
+    min-height: 24px;
+    padding: 0 8px;
+  }
+
+  .dashboard-stock-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: center;
+    gap: 5px 8px;
+    min-width: 0;
+  }
+
+  .dashboard-stock-added-stat {
+    display: inline-flex;
+  }
+
+  .dashboard-stock-stat {
+    gap: 3px;
+  }
+
+  .dashboard-stock-stats em {
+    display: inline;
+    font-size: 11px;
+  }
+
+  .dashboard-stock-stat > strong {
+    font-size: 13px;
   }
 
   .table-wrap {

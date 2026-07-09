@@ -1036,22 +1036,28 @@ function renderStockTable() {
 
   orderedStocks().forEach((stock) => {
     const latest = latestPrice(stock.id);
-    const row = document.createElement("tr");
+    const row = document.createElement("article");
+    row.className = "dashboard-stock-card";
     const tags = conceptsForStock(stock.id).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
+    const tagMarkup = tags || '<span class="muted">-</span>';
     row.innerHTML = `
-      <td data-label="股票">
-        <div class="stock-title stock-title-plain">
+      <div class="dashboard-stock-main">
+        <div class="stock-title stock-title-plain dashboard-stock-title">
           <strong>${escapeHtml(stock.name)}</strong>
           <span>${stock.market}${stock.code}</span>
         </div>
-      </td>
-      <td data-label="添加日">${stock.addedAt}</td>
-      <td data-label="最新价">${latest ? formatNumber(latest.close) : '<span class="muted">-</span>'}</td>
-      <td data-label="添加以来">${pctHtml(sinceAddedReturn(stock.id, stock.addedAt))}</td>
-      <td data-label="今日">${latest ? pctHtml(latest.changePct) : '<span class="muted">-</span>'}</td>
-      <td data-label="周">${pctHtml(periodReturn(stock.id, "weekly"))}</td>
-      <td data-label="月">${pctHtml(periodReturn(stock.id, "monthly"))}</td>
-      <td data-label="概念"><div class="tag-row">${tags || '<span class="muted">-</span>'}</div></td>
+        <span class="dashboard-stock-added-mobile"><em>添加</em><strong>${stock.addedAt}</strong></span>
+        <div class="tag-row dashboard-stock-tags dashboard-stock-tags-mobile">${tagMarkup}</div>
+      </div>
+      <div class="dashboard-stock-stats">
+        <span class="dashboard-stock-stat dashboard-stock-added-stat"><em>添加</em><strong>${stock.addedAt}</strong></span>
+        <span class="dashboard-stock-stat"><em>最新</em><strong>${latest ? formatNumber(latest.close) : '<span class="muted">-</span>'}</strong></span>
+        <span class="dashboard-stock-stat"><em>添加以来</em><strong>${pctHtml(sinceAddedReturn(stock.id, stock.addedAt))}</strong></span>
+        <span class="dashboard-stock-stat"><em>今日</em><strong>${latest ? pctHtml(latest.changePct) : '<span class="muted">-</span>'}</strong></span>
+        <span class="dashboard-stock-stat"><em>周</em><strong>${pctHtml(periodReturn(stock.id, "weekly"))}</strong></span>
+        <span class="dashboard-stock-stat"><em>月</em><strong>${pctHtml(periodReturn(stock.id, "monthly"))}</strong></span>
+        <div class="dashboard-stock-stat dashboard-stock-concepts"><div class="tag-row dashboard-stock-tags dashboard-stock-tags-desktop">${tagMarkup}</div></div>
+      </div>
     `;
     els.stockTableBody.appendChild(row);
   });

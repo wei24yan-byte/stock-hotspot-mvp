@@ -1,5 +1,5 @@
-const CACHE_NAME = "stock-hotspot-mvp-v63";
-// pages redeploy: rename app to Market Radar 2026-07-08
+const CACHE_NAME = "stock-hotspot-mvp-v75";
+// pages redeploy: mobile stock stats rows 2026-07-08
 const ASSETS = [
   "./",
   "./index.html",

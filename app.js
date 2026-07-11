@@ -7,6 +7,7 @@ const AUTO_SYNC_DELAY_MS = 1000;
 const AUTO_SYNC_RETRY_MS = 12000;
 const STOCK_LOOKUP_DELAY_MS = 280;
 const MARKET_HOLIDAYS = new Set([]);
+const LEGACY_CREATED_AT_FALLBACK = "1970-01-01T00:00:00.000Z";
 
 const newsTemplates = [
   "{name}盘中活跃，市场关注{concept}方向催化",
@@ -464,7 +465,7 @@ function sameSyncDigest(a, b) {
 
 function normalizeStock(stock, legacyConcepts = []) {
   const stockId = stock?.id || makeId();
-  const createdAt = stock?.createdAt || stock?.created_at || stock?.addedAt || stock?.added_at || new Date().toISOString();
+  const createdAt = stock?.createdAt || stock?.created_at || stock?.addedAt || stock?.added_at || LEGACY_CREATED_AT_FALLBACK;
   const migratedConcepts = legacyConcepts
     .filter((item) => item.stockId === stockId)
     .map((item) => item.tag);
@@ -479,7 +480,7 @@ function normalizeStock(stock, legacyConcepts = []) {
     market: inferMarket(stock?.code || "") || stock?.market || "SH",
     createdAt,
     addedAt: stock?.addedAt || stock?.added_at || formatDate(new Date()),
-    updatedAt: stock?.updatedAt || stock?.updated_at || stock?.addedAt || stock?.added_at || formatDate(new Date()),
+    updatedAt: stock?.updatedAt || stock?.updated_at || stock?.addedAt || stock?.added_at || createdAt,
     active: stock?.active !== false,
     pinned: stock?.pinned === true,
     concepts
@@ -827,10 +828,19 @@ async function generateDailyUpdate(showMessage = true) {
   const activeStocks = state.stocks.filter((stock) => stock.active);
   let updated = 0;
   let failed = 0;
+  let completed = 0;
   els.refreshBtn.disabled = true;
 
-  for (const stock of activeStocks) {
+  if (showMessage) showToast(`正在更新 0/${activeStocks.length}`, 5000);
+
+  const results = await mapWithConcurrency(activeStocks, 6, async (stock) => {
     const quote = await fetchStockQuote(stock.code, stock.market).catch(() => null);
+    completed += 1;
+    if (showMessage) showToast(`正在更新 ${completed}/${activeStocks.length}`, 5000);
+    return { stock, quote };
+  });
+
+  for (const { stock, quote } of results) {
     if (!quote?.close || quote.changePct === null) {
       failed += 1;
       continue;
@@ -862,6 +872,24 @@ async function generateDailyUpdate(showMessage = true) {
   if (showMessage) {
     showToast(failed ? `已更新${updated}只，${failed}只未取到` : "真实行情已更新");
   }
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let cursor = 0;
+
+  async function worker() {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
 }
 
 function upsertPrice(price) {
@@ -1789,9 +1817,9 @@ function escapeAttr(value) {
   return escapeHtml(value).replaceAll("`", "&#096;");
 }
 
-function showToast(message) {
+function showToast(message, duration = 1800) {
   els.toast.textContent = message;
   els.toast.classList.add("show");
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => els.toast.classList.remove("show"), 1800);
+  showToast.timer = setTimeout(() => els.toast.classList.remove("show"), duration);
 }

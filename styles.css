@@ -251,19 +251,41 @@ select:focus {
   padding: 12px;
 }
 
+.today-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 .today-refresh {
   display: flex;
   align-items: center;
   justify-content: space-between;
   width: 100%;
   min-height: 42px;
-  margin-bottom: 10px;
   padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
   color: var(--text);
   font-weight: 750;
+}
+
+.today-sort-button {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.today-sort-button.active {
+  border-color: rgba(37, 99, 235, 0.35);
+  background: var(--blue-soft);
+  color: #1746b8;
 }
 
 .refresh-symbol {

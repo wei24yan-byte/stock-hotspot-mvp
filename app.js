@@ -34,6 +34,7 @@ let autoSyncTimer = 0;
 let autoSyncInFlight = false;
 let autoSyncPending = false;
 let lastSupabaseError = "";
+let todaySortMode = "pinned";
 const CLIENT_ID = getClientId();
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -49,6 +50,7 @@ function bindElements() {
   [
     "todayLabel",
     "refreshBtn",
+    "todaySortBtn",
     "todayStockList",
     "stockCode",
     "stockName",
@@ -91,6 +93,7 @@ function bindEvents() {
   els.stockName.addEventListener("input", handleStockNameInput);
   els.stockName.addEventListener("blur", () => refreshStockCodeFromName());
   els.refreshBtn.addEventListener("click", () => generateDailyUpdate());
+  els.todaySortBtn.addEventListener("click", toggleTodaySortMode);
   els.buildReportsBtn.addEventListener("click", buildReports);
   els.copyReportBtn.addEventListener("click", copyLatestReport);
   els.saveSupabaseBtn.addEventListener("click", saveSupabaseConfig);
@@ -1007,8 +1010,12 @@ function render() {
 
 function renderTodayList() {
   if (!els.todayStockList) return;
+  if (els.todaySortBtn) {
+    els.todaySortBtn.textContent = todaySortMode === "change" ? "置顶优先" : "涨幅排序";
+    els.todaySortBtn.classList.toggle("active", todaySortMode === "change");
+  }
   els.todayStockList.innerHTML = state.stocks.length
-    ? orderedStocks()
+    ? todayOrderedStocks()
         .map((stock) => {
           const latest = latestPrice(stock.id);
           const changeClass = latest?.changePct === undefined || latest?.changePct === null ? "" : Number(latest.changePct) >= 0 ? "positive" : "negative";
@@ -1040,6 +1047,24 @@ function renderTodayList() {
 
   els.todayStockList.querySelectorAll("[data-action='pin-today']").forEach((button) => {
     button.addEventListener("click", () => togglePinnedStock(button.dataset.stockId));
+  });
+}
+
+function toggleTodaySortMode() {
+  todaySortMode = todaySortMode === "change" ? "pinned" : "change";
+  renderTodayList();
+}
+
+function todayOrderedStocks() {
+  if (todaySortMode !== "change") return orderedStocks();
+  return [...state.stocks].sort((a, b) => {
+    const aLatest = latestPrice(a.id);
+    const bLatest = latestPrice(b.id);
+    const aHasChange = Number.isFinite(Number(aLatest?.changePct));
+    const bHasChange = Number.isFinite(Number(bLatest?.changePct));
+    if (aHasChange !== bHasChange) return aHasChange ? -1 : 1;
+    if (aHasChange && bHasChange) return Number(bLatest.changePct) - Number(aLatest.changePct);
+    return Number(b.pinned === true) - Number(a.pinned === true);
   });
 }
 

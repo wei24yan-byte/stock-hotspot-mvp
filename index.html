@@ -20,10 +20,13 @@
       <main>
         <section id="todayView" class="view">
           <section class="panel today-panel">
-            <button class="today-refresh" id="refreshBtn" type="button" title="点击刷新行情" aria-label="点击今日日期刷新行情">
-              <span id="todayLabel"></span>
-              <span class="refresh-symbol">↻</span>
-            </button>
+            <div class="today-toolbar">
+              <button class="today-refresh" id="refreshBtn" type="button" title="点击刷新行情" aria-label="点击今日日期刷新行情">
+                <span id="todayLabel"></span>
+                <span class="refresh-symbol">↻</span>
+              </button>
+              <button class="today-sort-button" id="todaySortBtn" type="button">涨幅排序</button>
+            </div>
             <div class="today-stock-list" id="todayStockList"></div>
           </section>
         </section>

@@ -412,14 +412,14 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runSupabaseSave(snapshotFactory, forceStatus = false) {
+async function runSupabaseSave(snapshotFactory, forceStatus = false, replaceCloud = false) {
   while (autoSyncInFlight) {
     await delay(250);
   }
   autoSyncInFlight = true;
   try {
     const snapshot = typeof snapshotFactory === "function" ? snapshotFactory() : snapshotFactory;
-    return await saveSupabaseState(snapshot, forceStatus);
+    return await saveSupabaseState(snapshot, forceStatus, replaceCloud);
   } finally {
     autoSyncInFlight = false;
   }
@@ -506,7 +506,7 @@ async function saveSupabaseConfig() {
   updateSupabaseStatus(autoSyncInFlight ? "等待当前同步完成" : "上传中");
   els.saveSupabaseBtn.disabled = true;
   try {
-    const ok = await runSupabaseSave(currentStateSnapshot, true);
+    const ok = await runSupabaseSave(currentStateSnapshot, true, true);
     if (ok) {
       updateSupabaseStatus(`已同步并验证：${stateSummary(state)}`);
       showToast("云端同步已开启");
@@ -591,11 +591,11 @@ async function loadSupabaseState(showErrors = false, updateStatus = true, create
   }
 }
 
-async function saveSupabaseState(nextState, forceStatus = false) {
+async function saveSupabaseState(nextState, forceStatus = false, replaceCloud = false) {
   const config = getSupabaseConfig();
   if (!config) return false;
   try {
-    const cloudBeforeWrite = await loadSupabaseState(false, false, false);
+    const cloudBeforeWrite = replaceCloud ? null : await loadSupabaseState(false, false, false);
     const mergedBeforeWrite = cloudBeforeWrite ? mergeStates(nextState, cloudBeforeWrite) : normalizeState(nextState);
     const normalized = withSyncMeta(mergedBeforeWrite);
     const savedState = await writeSupabaseRow(config, normalized);

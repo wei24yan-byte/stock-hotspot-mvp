@@ -1,6 +1,6 @@
 const STORAGE_KEY = "stock-hotspot-mvp-v1";
 const SUPABASE_CONFIG_KEY = "stock-hotspot-supabase-config-v1";
-const SUPABASE_STATE_ROW_ID = "default";
+const SUPABASE_STATE_ROW_ID = "primary-v2";
 const API_STATE_URL = "./api/state";
 const STATIC_STATE_URL = "./data/state.json";
 const CLOUD_RESTORE_BACKUP_KEY = "stock-hotspot-backup-before-cloud-v1";
@@ -122,6 +122,7 @@ let planStockLookupTimer = 0;
 let planStockLookupRequestId = 0;
 let planResolvedStock = null;
 let planResolvedQuery = "";
+let stockDetailsExpanded = false;
 const CLIENT_ID = getClientId();
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -155,6 +156,7 @@ function bindElements() {
     "metricDaily",
     "metricConcept",
     "stockCards",
+    "toggleStockDetailsBtn",
     "buildReportsBtn",
     "copyReportBtn",
     "toggleHistoryReportsBtn",
@@ -257,6 +259,7 @@ function bindEvents() {
     dashboardStatusFilter = els.stockStatusFilter.value;
     renderStockTable();
   });
+  els.toggleStockDetailsBtn.addEventListener("click", toggleStockDetails);
   els.buildReportsBtn.addEventListener("click", buildReports);
   els.copyReportBtn.addEventListener("click", copyLatestReport);
   els.toggleHistoryReportsBtn.addEventListener("click", toggleHistoryReports);
@@ -353,15 +356,23 @@ async function loadState() {
 async function refreshCloudAfterStartup() {
   const cloudState = await loadSupabaseState(false, false, false);
   if (!cloudState) {
-    updateSupabaseStatus("云端暂不可用，已保留本机数据");
+    updateSupabaseStatus("新云端空间待上传，已保留本机数据");
+    queueSupabaseSync(300);
     return;
   }
   const latestLocal = loadLocalState() || state;
-  const merged = mergeCloudIntoLocal(latestLocal, cloudState);
-  state = merged;
+  const cloudUpdatedAt = syncUpdatedTime(cloudState);
+  const localUpdatedAt = syncUpdatedTime(latestLocal);
+  const cloudIsNewer = cloudUpdatedAt >= localUpdatedAt;
+  state = cloudIsNewer ? normalizeState(cloudState) : normalizeState(latestLocal);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
-  updateSupabaseStatus(`已合并本机与云端：${stateSummary(merged)}`);
+  if (cloudIsNewer) {
+    updateSupabaseStatus(`已读取云端主数据：${stateSummary(state)}`);
+  } else {
+    updateSupabaseStatus(`本机数据较新，等待上传：${stateSummary(state)}`);
+    queueSupabaseSync(300);
+  }
 }
 
 function loadLocalState() {
@@ -375,6 +386,12 @@ function loadLocalState() {
 
 function saveState() {
   state = normalizeState(state);
+  state.syncMeta = {
+    ...(state.syncMeta || {}),
+    clientId: CLIENT_ID,
+    schemaVersion: 2,
+    updatedAt: new Date().toISOString()
+  };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   queueSupabaseSync();
   if (!apiAvailable) return;
@@ -412,14 +429,14 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runSupabaseSave(snapshotFactory, forceStatus = false, replaceCloud = false) {
+async function runSupabaseSave(snapshotFactory, forceStatus = false) {
   while (autoSyncInFlight) {
     await delay(250);
   }
   autoSyncInFlight = true;
   try {
     const snapshot = typeof snapshotFactory === "function" ? snapshotFactory() : snapshotFactory;
-    return await saveSupabaseState(snapshot, forceStatus, replaceCloud);
+    return await saveSupabaseState(snapshot, forceStatus);
   } finally {
     autoSyncInFlight = false;
   }
@@ -506,7 +523,7 @@ async function saveSupabaseConfig() {
   updateSupabaseStatus(autoSyncInFlight ? "等待当前同步完成" : "上传中");
   els.saveSupabaseBtn.disabled = true;
   try {
-    const ok = await runSupabaseSave(currentStateSnapshot, true, true);
+    const ok = await runSupabaseSave(currentStateSnapshot, true);
     if (ok) {
       updateSupabaseStatus(`已同步并验证：${stateSummary(state)}`);
       showToast("云端同步已开启");
@@ -530,13 +547,12 @@ async function pullSupabaseState() {
     return;
   }
   const localState = loadLocalState();
-  const previousCount = localState ? localState.stocks.length : 0;
-  state = localState ? mergeCloudIntoLocal(localState, cloudState) : normalizeState(cloudState);
+  if (localState) localStorage.setItem(CLOUD_RESTORE_BACKUP_KEY, JSON.stringify(localState));
+  state = normalizeState(cloudState);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
-  updateSupabaseStatus(`已合并本机与云端：${stateSummary(state)}`);
-  const deletedCount = Math.max(0, previousCount - state.stocks.length);
-  showToast(deletedCount ? `已同步，删除${deletedCount}只` : "已合并本机与云端");
+  updateSupabaseStatus(`已读取云端主数据：${stateSummary(state)}`);
+  showToast("已读取云端主数据，本机旧数据已备份");
 }
 
 async function replaceWithCloudState() {
@@ -591,13 +607,11 @@ async function loadSupabaseState(showErrors = false, updateStatus = true, create
   }
 }
 
-async function saveSupabaseState(nextState, forceStatus = false, replaceCloud = false) {
+async function saveSupabaseState(nextState, forceStatus = false) {
   const config = getSupabaseConfig();
   if (!config) return false;
   try {
-    const cloudBeforeWrite = replaceCloud ? null : await loadSupabaseState(false, false, false);
-    const mergedBeforeWrite = cloudBeforeWrite ? mergeStates(nextState, cloudBeforeWrite) : normalizeState(nextState);
-    const normalized = withSyncMeta(mergedBeforeWrite);
+    const normalized = withSyncMeta(nextState);
     const savedState = await writeSupabaseRow(config, normalized);
     state = normalizeState(savedState || normalized);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -696,9 +710,14 @@ function withSyncMeta(nextState) {
   normalized.syncMeta = {
     digest: stableNumber(stableStringify(canonicalState(normalized))).toString(36),
     clientId: CLIENT_ID,
+    schemaVersion: 2,
     updatedAt: new Date().toISOString()
   };
   return normalized;
+}
+
+function syncUpdatedTime(value) {
+  return timestampValue(value?.syncMeta?.updatedAt);
 }
 
 function sameSyncDigest(a, b) {
@@ -1865,51 +1884,65 @@ function renderStockCards() {
     ? orderedStocks()
         .map((stock) => {
           const latest = latestPrice(stock.id);
+          const todayChange = latest ? formatPct(latest.changePct) : "-";
           const concepts = conceptsForStock(stock.id)
             .map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`)
             .join("");
           const conceptValue = conceptsForStock(stock.id).join("、");
           return `
-            <article class="stock-card">
-              <div class="stock-card-head">
+            <details class="stock-card stock-detail-card"${stockDetailsExpanded ? " open" : ""}>
+              <summary class="stock-detail-summary">
                 <div class="stock-title">
                   <strong>${escapeHtml(stock.name)}</strong>
-                  <span>${stock.market}${stock.code} · ${stock.addedAt}</span>
+                  <span>${stock.market}${stock.code}</span>
                 </div>
-                <div class="stock-actions">
-                  <button class="ghost-button" data-action="toggle" data-stock-id="${stock.id}">${stock.active ? "停用" : "启用"}</button>
-                  <button class="danger-button" data-action="delete" data-stock-id="${stock.id}">删除</button>
+                <em class="workflow-badge status-${stock.workflowStatus}">${escapeHtml(workflowStatusLabel(stock.workflowStatus))}</em>
+                <span class="stock-summary-price">最新 ${latest ? formatNumber(latest.close) : "-"}</span>
+                <span class="stock-summary-change ${reportChangeClass(latest?.changePct)}">今日 ${todayChange}</span>
+                <span class="stock-summary-concepts">${escapeHtml(conceptValue || "暂无概念")}</span>
+                <span class="stock-detail-chevron" aria-hidden="true">⌄</span>
+              </summary>
+              <div class="stock-detail-body">
+                <div class="stock-card-head">
+                  <div class="stock-title">
+                    <strong>${escapeHtml(stock.name)}</strong>
+                    <span>${stock.market}${stock.code} · ${stock.addedAt}</span>
+                  </div>
+                  <div class="stock-actions">
+                    <button class="ghost-button" data-action="toggle" data-stock-id="${stock.id}">${stock.active ? "停用" : "启用"}</button>
+                    <button class="danger-button" data-action="delete" data-stock-id="${stock.id}">删除</button>
+                  </div>
+                </div>
+                <div class="mini-stats">
+                  <div class="mini-stat"><span>最新价</span><strong>${latest ? formatNumber(latest.close) : "-"}</strong></div>
+                  <div class="mini-stat"><span>今日</span><strong>${todayChange}</strong></div>
+                  <div class="mini-stat"><span>添加以来</span><strong>${formatPct(sinceAddedReturn(stock.id, stock.addedAt))}</strong></div>
+                </div>
+                <div class="stock-workflow-controls">
+                  <label>
+                    <span>状态</span>
+                    <select data-stock-status="${stock.id}">
+                      ${optionHtml(STOCK_STATUS_OPTIONS, stock.workflowStatus)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>入场策略</span>
+                    <select data-stock-strategy="${stock.id}">
+                      ${optionHtml(STRATEGY_OPTIONS, stock.strategy)}
+                    </select>
+                  </label>
+                  <button class="ghost-button" data-action="open-plan" data-stock-id="${stock.id}">制定计划</button>
+                </div>
+                <div class="tag-row">${concepts || '<span class="muted">暂无概念</span>'}</div>
+                <div class="concept-editor">
+                  <label>
+                    <span>手动概念</span>
+                    <input data-concept-input="${stock.id}" value="${escapeAttr(conceptValue)}" placeholder="AI算力、机器人、低空经济" />
+                  </label>
+                  <button class="ghost-button" data-action="save-concepts" data-stock-id="${stock.id}">保存概念</button>
                 </div>
               </div>
-              <div class="mini-stats">
-                <div class="mini-stat"><span>最新价</span><strong>${latest ? formatNumber(latest.close) : "-"}</strong></div>
-                <div class="mini-stat"><span>今日</span><strong>${latest ? formatPct(latest.changePct) : "-"}</strong></div>
-                <div class="mini-stat"><span>添加以来</span><strong>${formatPct(sinceAddedReturn(stock.id, stock.addedAt))}</strong></div>
-              </div>
-              <div class="stock-workflow-controls">
-                <label>
-                  <span>状态</span>
-                  <select data-stock-status="${stock.id}">
-                    ${optionHtml(STOCK_STATUS_OPTIONS, stock.workflowStatus)}
-                  </select>
-                </label>
-                <label>
-                  <span>入场策略</span>
-                  <select data-stock-strategy="${stock.id}">
-                    ${optionHtml(STRATEGY_OPTIONS, stock.strategy)}
-                  </select>
-                </label>
-                <button class="ghost-button" data-action="open-plan" data-stock-id="${stock.id}">制定计划</button>
-              </div>
-              <div class="tag-row">${concepts || '<span class="muted">暂无概念</span>'}</div>
-              <div class="concept-editor">
-                <label>
-                  <span>手动概念</span>
-                  <input data-concept-input="${stock.id}" value="${escapeAttr(conceptValue)}" placeholder="AI算力、机器人、低空经济" />
-                </label>
-                <button class="ghost-button" data-action="save-concepts" data-stock-id="${stock.id}">保存概念</button>
-              </div>
-            </article>
+            </details>
           `;
         })
         .join("")
@@ -1966,6 +1999,14 @@ function renderStockCards() {
       setPlanSection("plans");
       showPlanEditor(button.dataset.stockId);
     });
+  });
+}
+
+function toggleStockDetails() {
+  stockDetailsExpanded = !stockDetailsExpanded;
+  els.toggleStockDetailsBtn.textContent = stockDetailsExpanded ? "全部收起" : "全部展开";
+  els.stockCards.querySelectorAll(".stock-detail-card").forEach((card) => {
+    card.open = stockDetailsExpanded;
   });
 }
 
@@ -3841,7 +3882,9 @@ function parseLocalDate(value) {
 
 function stateSummary(value) {
   const data = normalizeState(value);
-  return `股票${data.stocks.length} 行情${data.prices.length} 计划${data.plans.length}`;
+  const holding = data.stocks.filter((stock) => stock.workflowStatus === "holding").length;
+  const planned = data.stocks.filter((stock) => stock.workflowStatus === "planned").length;
+  return `股票${data.stocks.length} 持仓${holding} 待计划${planned} 行情${data.prices.length} 交易计划${data.plans.length}`;
 }
 
 function formatDate(date) {

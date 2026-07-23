@@ -1,9 +1,9 @@
-const CACHE_NAME = "stock-hotspot-mvp-v83-final5";
+const CACHE_NAME = "stock-hotspot-mvp-v83-final6";
 const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css?v=83.5",
-  "./app.js?v=83.5",
+  "./styles.css?v=83.6",
+  "./app.js?v=83.6",
   "./manifest.webmanifest",
   "./assets/icon.svg"
 ];

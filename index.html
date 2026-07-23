@@ -6,32 +6,37 @@
     <meta name="theme-color" content="#f7f8fa" />
     <title>Market Radar</title>
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./styles.css?v=65" />
+    <link rel="stylesheet" href="./styles.css?v=83.3" />
   </head>
   <body>
     <div class="app-shell">
       <nav class="tabs" aria-label="视图">
-        <button class="tab active" data-view="dashboard">总览</button>
-        <button class="tab" data-view="today">今日</button>
+        <button class="tab" data-view="dashboard">总览</button>
+        <button class="tab active" data-view="today">今日</button>
+        <button class="tab" data-view="plans">计划</button>
         <button class="tab" data-view="stocks">股票</button>
         <button class="tab" data-view="reports">报告</button>
       </nav>
 
       <main>
-        <section id="todayView" class="view">
+        <section id="todayView" class="view active">
           <section class="panel today-panel">
             <div class="today-toolbar">
               <button class="today-refresh" id="refreshBtn" type="button" title="点击刷新行情" aria-label="点击今日日期刷新行情">
                 <span id="todayLabel"></span>
                 <span class="refresh-symbol">↻</span>
               </button>
-              <button class="today-sort-button" id="todaySortBtn" type="button">涨幅排序</button>
+              <div class="today-toolbar-actions">
+                <span class="status-pill market-freshness" id="marketFreshness">暂无行情</span>
+                <button class="today-focus-button" id="focusModeBtn" type="button">盘中模式</button>
+                <button class="today-sort-button" id="todaySortBtn" type="button">涨幅排序</button>
+              </div>
             </div>
             <div class="today-stock-list" id="todayStockList"></div>
           </section>
         </section>
 
-        <section id="dashboardView" class="view active">
+        <section id="dashboardView" class="view">
           <div class="metric-grid">
             <article class="metric-card">
               <span>关注股票</span>
@@ -51,6 +56,16 @@
             <section class="panel wide-panel">
               <div class="panel-head">
                 <h2>股票池</h2>
+                <div class="dashboard-filters">
+                  <input id="stockSearch" type="search" autocomplete="off" placeholder="搜索股票、代码或概念" />
+                  <select id="stockStatusFilter" aria-label="按股票状态筛选">
+                    <option value="all">全部状态</option>
+                    <option value="watch">观察中</option>
+                    <option value="planned">明日计划</option>
+                    <option value="holding">已持仓</option>
+                    <option value="closed">已结束</option>
+                  </select>
+                </div>
               </div>
               <div class="table-wrap">
                 <table>
@@ -64,6 +79,7 @@
                       <th>周</th>
                       <th>月</th>
                       <th>概念</th>
+                      <th>走势</th>
                     </tr>
                   </thead>
                   <tbody id="stockTableBody"></tbody>
@@ -158,21 +174,395 @@
         </section>
 
         <section id="reportsView" class="view">
-          <section class="panel wide-panel">
+          <section class="panel wide-panel report-output-panel">
             <div class="panel-head">
-              <h2>报告</h2>
+              <h2>日报</h2>
               <div class="report-toolbar">
                 <button class="primary-button" id="buildReportsBtn">生成日报</button>
                 <button class="ghost-button" id="copyReportBtn">复制最新报告</button>
+                <button class="ghost-button" id="toggleHistoryReportsBtn">展开历史</button>
               </div>
             </div>
             <div id="reportList" class="report-list"></div>
           </section>
         </section>
+
+        <section id="plansView" class="view">
+          <section class="panel wide-panel plan-overview-panel">
+            <div class="panel-head">
+              <div>
+                <h2>交易计划</h2>
+                <span class="panel-subtitle" id="planDateLabel"></span>
+              </div>
+            </div>
+            <div class="plan-overview-grid">
+              <article>
+                <span>计划股票</span>
+                <strong id="planOverviewCount">0</strong>
+              </article>
+              <article>
+                <span>计划总仓位</span>
+                <strong id="planOverviewPosition">0%</strong>
+              </article>
+              <article>
+                <span>待复核</span>
+                <strong id="planOverviewRiskCount">0</strong>
+              </article>
+            </div>
+            <div class="plan-risk-summary" id="planRiskSummary">尚未制定明日计划</div>
+            <nav class="plan-subtabs" aria-label="计划工作区">
+              <button class="plan-subtab active" data-plan-section="plans" type="button">明日计划</button>
+              <button class="plan-subtab" data-plan-section="execution" type="button">执行记录</button>
+              <button class="plan-subtab" data-plan-section="review" type="button">复盘统计</button>
+            </nav>
+          </section>
+
+          <section class="plan-subview active" data-plan-panel="plans">
+            <section class="panel wide-panel plan-list-workspace">
+              <div class="panel-head">
+                <div>
+                  <h2>明日计划</h2>
+                  <span class="panel-subtitle">盘前制定，盘中按条件执行</span>
+                </div>
+                <button class="primary-button compact-button" id="togglePlanEditorBtn" type="button">＋ 新建计划</button>
+              </div>
+              <div class="plan-list" id="planList"></div>
+            </section>
+
+            <section class="panel wide-panel plan-workspace" id="planEditorPanel" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2>制定计划</h2>
+                  <span class="panel-subtitle">价格、失效条件与卖出规则一次设定</span>
+                </div>
+                <div class="button-row">
+                  <button class="ghost-button" id="resetPlanBtn" type="button">清空</button>
+                  <button class="ghost-button" id="closePlanEditorBtn" type="button">收起</button>
+                </div>
+              </div>
+
+              <div class="plan-stock-add">
+                <div class="plan-stock-add-head">
+                  <span>计划里找不到股票？</span>
+                  <button class="ghost-button compact-button" id="togglePlanStockAddBtn" type="button">＋ 添加新股票</button>
+                </div>
+                <div class="plan-stock-add-form" id="planStockAddPanel" hidden>
+                  <label>
+                    <span>股票代码或名称</span>
+                    <input id="planStockQuery" autocomplete="off" placeholder="例如 600519 或 贵州茅台" />
+                  </label>
+                  <div class="market-preview">
+                    <span>识别结果</span>
+                    <strong id="planStockAddPreview">输入代码或名称后识别</strong>
+                  </div>
+                  <label>
+                    <span>概念（选填）</span>
+                    <input id="planStockConcepts" autocomplete="off" placeholder="例如 白酒、消费" />
+                  </label>
+                  <button class="primary-button" id="addPlanStockBtn" type="button">添加并选中</button>
+                </div>
+              </div>
+
+              <div class="plan-market-context">
+                <div>
+                  <span>当前股票</span>
+                  <strong id="planContextName">-</strong>
+                </div>
+                <div>
+                  <span>最新价</span>
+                  <strong id="planContextPrice">-</strong>
+                </div>
+                <div>
+                  <span>今日涨幅</span>
+                  <strong id="planContextChange">-</strong>
+                </div>
+                <div>
+                  <span>波动参考</span>
+                  <strong id="planContextRisk">-</strong>
+                </div>
+              </div>
+
+              <section class="plan-suggestion-panel" aria-label="智能计划建议">
+                <div class="plan-suggestion-head">
+                  <div>
+                    <strong>智能建议参数</strong>
+                    <span>根据历史走势、波动和所选策略计算，采用前仍可修改</span>
+                  </div>
+                  <button class="primary-button compact-button" id="suggestPlanBtn" type="button">生成建议</button>
+                </div>
+                <div class="plan-risk-settings">
+                  <label>
+                    <span>单笔风险上限</span>
+                    <div class="input-suffix">
+                      <input id="planRiskPct" inputmode="decimal" value="0.5" />
+                      <span>%</span>
+                    </div>
+                  </label>
+                  <label>
+                    <span>单票仓位上限</span>
+                    <div class="input-suffix">
+                      <input id="planMaxPositionPct" inputmode="decimal" value="15" />
+                      <span>%</span>
+                    </div>
+                  </label>
+                  <label>
+                    <span>计划总仓位上限</span>
+                    <div class="input-suffix">
+                      <input id="planMaxTotalPositionPct" inputmode="decimal" value="50" />
+                      <span>%</span>
+                    </div>
+                  </label>
+                </div>
+                <div class="plan-suggestion-result" id="planSuggestionResult">
+                  选择股票和策略后生成建议；历史数据不足时会降低置信度。
+                </div>
+              </section>
+
+              <details class="plan-form-disclosure" open>
+                <summary>
+                  <span>买入计划</span>
+                  <small>入场区、失效价、目标和仓位</small>
+                </summary>
+                <div class="plan-form-grid">
+                  <label>
+                    <span>股票</span>
+                    <select id="planStock"></select>
+                  </label>
+                  <label>
+                    <span>入场策略</span>
+                    <select id="planStrategy">
+                      <option value="">未设置</option>
+                      <option value="breakout">突破确认</option>
+                      <option value="breakout_retest">突破回踩</option>
+                      <option value="trend_pullback">趋势回踩</option>
+                      <option value="support_rebound">支撑反弹</option>
+                      <option value="rebound">超跌反弹</option>
+                      <option value="event">事件驱动</option>
+                      <option value="custom">自定义</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>计划买入下限</span>
+                    <input id="planEntryLow" inputmode="decimal" placeholder="例如 48.00" />
+                  </label>
+                  <label>
+                    <span>计划买入上限</span>
+                    <input id="planEntryHigh" inputmode="decimal" placeholder="例如 50.00" />
+                  </label>
+                  <label>
+                    <span>策略失效价</span>
+                    <input id="planInvalidation" inputmode="decimal" placeholder="例如 46.50" />
+                  </label>
+                  <label>
+                    <span>第一目标价</span>
+                    <input id="planTarget1" inputmode="decimal" placeholder="选填" />
+                  </label>
+                  <label>
+                    <span>第二目标价</span>
+                    <input id="planTarget2" inputmode="decimal" placeholder="选填" />
+                  </label>
+                  <label>
+                    <span>计划仓位</span>
+                    <div class="input-suffix">
+                      <input id="planPositionPct" inputmode="decimal" placeholder="例如 10" />
+                      <span>%</span>
+                    </div>
+                  </label>
+                  <label>
+                    <span>买入逻辑</span>
+                    <select id="planEntryLogic">
+                      <option value="">未设置</option>
+                      <option value="breakout_volume">突破且放量</option>
+                      <option value="breakout_retest">突破后回踩企稳</option>
+                      <option value="ma_support">均线回踩企稳</option>
+                      <option value="structure_support">结构支撑止跌</option>
+                      <option value="reversal_confirm">反转形态确认</option>
+                      <option value="event_confirm">事件催化确认</option>
+                      <option value="manual">手动确认</option>
+                    </select>
+                  </label>
+                  <details class="condition-picker plan-no-trade-picker">
+                    <summary>
+                      <span>不交易条件</span>
+                      <strong id="planNoTradeSummary">未选择</strong>
+                    </summary>
+                    <div class="condition-option-grid" id="planNoTradeConditions">
+                      <label><input type="checkbox" value="above_entry" /><span>价格超过买入上限</span></label>
+                      <label><input type="checkbox" value="below_invalidation" /><span>买入前跌破失效价</span></label>
+                      <label><input type="checkbox" value="volume_unconfirmed" /><span>成交量未确认</span></label>
+                      <label><input type="checkbox" value="sector_weak" /><span>板块或概念转弱</span></label>
+                      <label><input type="checkbox" value="market_weak" /><span>大盘环境不符合</span></label>
+                      <label><input type="checkbox" value="rr_low" /><span>盈亏比不足 1.5R</span></label>
+                      <label><input type="checkbox" value="volatility_abnormal" /><span>当日波动异常扩大</span></label>
+                      <label><input type="checkbox" value="data_stale" /><span>行情过期或数据不足</span></label>
+                      <label><input type="checkbox" value="position_limit" /><span>计划总仓位超限</span></label>
+                      <label><input type="checkbox" value="event_unconfirmed" /><span>事件催化未确认</span></label>
+                    </div>
+                  </details>
+                  <label class="plan-note-field">
+                    <span>补充买入说明（选填）</span>
+                    <textarea id="planNote" rows="2" placeholder="记录只适用于这只股票的特殊条件"></textarea>
+                  </label>
+                </div>
+              </details>
+
+              <details class="plan-form-disclosure" open>
+                <summary>
+                  <span>卖出计划</span>
+                  <small id="planExitRemainder">剩余仓位 40%</small>
+                </summary>
+                <div class="plan-form-grid">
+                  <label>
+                    <span>失效触发方式</span>
+                    <select id="planInvalidationTrigger">
+                      <option value="close">收盘确认</option>
+                      <option value="intraday">盘中触及</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>第一目标卖出</span>
+                    <div class="input-suffix">
+                      <input id="planTarget1SellPct" inputmode="decimal" value="30" />
+                      <span>%</span>
+                    </div>
+                  </label>
+                  <label>
+                    <span>第二目标卖出</span>
+                    <div class="input-suffix">
+                      <input id="planTarget2SellPct" inputmode="decimal" value="30" />
+                      <span>%</span>
+                    </div>
+                  </label>
+                  <label>
+                    <span>剩余仓位保护</span>
+                    <select id="planTrailingRule">
+                      <option value="structure">近期结构低点</option>
+                      <option value="breakeven">成本价保护</option>
+                      <option value="ma5">5日线保护</option>
+                      <option value="previous_low">前一交易日低点</option>
+                      <option value="manual">手动复核</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>主要退出逻辑</span>
+                    <select id="planExitLogic">
+                      <option value="invalidation">策略失效退出</option>
+                      <option value="targets">目标分批止盈</option>
+                      <option value="trailing">移动保护退出</option>
+                      <option value="time">时间退出</option>
+                      <option value="context">板块或事件退出</option>
+                      <option value="manual">手动复核</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>最长持有天数</span>
+                    <input id="planMaxHoldDays" inputmode="numeric" placeholder="选填，例如 3" />
+                  </label>
+                  <details class="condition-picker plan-exit-condition-picker">
+                    <summary>
+                      <span>逻辑退出条件</span>
+                      <strong id="planExitConditionSummary">未选择</strong>
+                    </summary>
+                    <div class="condition-option-grid" id="planExitConditions">
+                      <label><input type="checkbox" value="invalidation" /><span>触发策略失效价</span></label>
+                      <label><input type="checkbox" value="target1" /><span>达到第一目标价</span></label>
+                      <label><input type="checkbox" value="target2" /><span>达到第二目标价</span></label>
+                      <label><input type="checkbox" value="previous_low" /><span>跌破前一交易日低点</span></label>
+                      <label><input type="checkbox" value="ma5" /><span>跌破5日线</span></label>
+                      <label><input type="checkbox" value="ma10" /><span>跌破10日线</span></label>
+                      <label><input type="checkbox" value="structure_low" /><span>跌破近期结构低点</span></label>
+                      <label><input type="checkbox" value="breakeven" /><span>回落至成本价保护</span></label>
+                      <label><input type="checkbox" value="sector_weak" /><span>板块或热点退潮</span></label>
+                      <label><input type="checkbox" value="event_failed" /><span>催化落空或不及预期</span></label>
+                      <label><input type="checkbox" value="max_days" /><span>达到最长持有天数</span></label>
+                      <label><input type="checkbox" value="market_risk" /><span>大盘风险触发</span></label>
+                    </div>
+                  </details>
+                  <label class="plan-exit-note-field">
+                    <span>补充退出说明（选填）</span>
+                    <textarea id="planExitNote" rows="2" placeholder="记录无法用选项表达的特殊退出条件"></textarea>
+                  </label>
+                  <button class="primary-button plan-save-button" id="savePlanBtn" type="button">保存计划</button>
+                </div>
+              </details>
+            </section>
+          </section>
+
+          <section class="plan-subview" data-plan-panel="execution">
+            <section class="panel wide-panel execution-workspace">
+              <div class="panel-head">
+                <h2>执行记录</h2>
+                <span class="panel-subtitle">买入、卖出和放弃都值得记录</span>
+              </div>
+              <div class="trade-log-form">
+                <label>
+                  <span>股票</span>
+                  <select id="tradeStock"></select>
+                </label>
+                <label>
+                  <span>动作</span>
+                  <select id="tradeAction">
+                    <option value="buy">买入</option>
+                    <option value="sell">卖出</option>
+                    <option value="skip">未交易</option>
+                  </select>
+                </label>
+                <label>
+                  <span>成交价格</span>
+                  <input id="tradePrice" inputmode="decimal" placeholder="未交易可留空" />
+                </label>
+                <label>
+                  <span>数量</span>
+                  <input id="tradeQuantity" inputmode="numeric" placeholder="股" />
+                </label>
+                <label class="trade-reason-field">
+                  <span>原因</span>
+                  <input id="tradeReason" autocomplete="off" placeholder="按计划买入、跌破失效价、高开过多…" />
+                </label>
+                <label class="check-field">
+                  <input id="tradeFollowedPlan" type="checkbox" checked />
+                  <span>遵守计划</span>
+                </label>
+                <button class="primary-button" id="saveTradeLogBtn" type="button">保存记录</button>
+              </div>
+              <div class="trade-log-list" id="tradeLogList"></div>
+            </section>
+          </section>
+
+          <section class="plan-subview" data-plan-panel="review">
+            <section class="review-metric-grid" aria-label="复盘统计">
+              <article class="metric-card">
+                <span>累计计划</span>
+                <strong id="reviewPlans">0</strong>
+              </article>
+              <article class="metric-card">
+                <span>已执行</span>
+                <strong id="reviewExecuted">0</strong>
+              </article>
+              <article class="metric-card">
+                <span>主动放弃</span>
+                <strong id="reviewSkipped">0</strong>
+              </article>
+              <article class="metric-card">
+                <span>计划执行率</span>
+                <strong id="reviewDiscipline">-</strong>
+              </article>
+            </section>
+
+            <section class="panel wide-panel snapshot-panel">
+              <div class="panel-head">
+                <h2>历史快照</h2>
+                <span class="panel-subtitle">刷新行情和生成日报时自动保存</span>
+              </div>
+              <div id="snapshotSummary"></div>
+            </section>
+          </section>
+
+        </section>
       </main>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=65"></script>
+    <script src="./app.js?v=83.3"></script>
   </body>
 </html>

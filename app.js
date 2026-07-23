@@ -3,6 +3,7 @@ const SUPABASE_CONFIG_KEY = "stock-hotspot-supabase-config-v1";
 const SUPABASE_STATE_ROW_ID = "default";
 const API_STATE_URL = "./api/state";
 const STATIC_STATE_URL = "./data/state.json";
+const CLOUD_RESTORE_BACKUP_KEY = "stock-hotspot-backup-before-cloud-v1";
 const AUTO_SYNC_DELAY_MS = 1000;
 const AUTO_SYNC_RETRY_MS = 12000;
 const STOCK_LOOKUP_DELAY_MS = 280;
@@ -223,6 +224,7 @@ function bindElements() {
     "supabaseAnonKey",
     "saveSupabaseBtn",
     "pullSupabaseBtn",
+    "replaceFromCloudBtn",
     "supabaseStatus",
     "exportBtn",
     "importFile",
@@ -284,6 +286,7 @@ function bindEvents() {
   els.saveTradeLogBtn.addEventListener("click", saveTradeLogFromForm);
   els.saveSupabaseBtn.addEventListener("click", saveSupabaseConfig);
   els.pullSupabaseBtn.addEventListener("click", pullSupabaseState);
+  els.replaceFromCloudBtn.addEventListener("click", replaceWithCloudState);
   els.exportBtn.addEventListener("click", exportData);
   els.importFile.addEventListener("change", importData);
   els.rebuildBtn.addEventListener("click", rebuildConcepts);
@@ -358,7 +361,6 @@ async function refreshCloudAfterStartup() {
   state = merged;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
-  if (!statesEqual(merged, cloudState)) queueSupabaseSync(300);
   updateSupabaseStatus(`已合并本机与云端：${stateSummary(merged)}`);
 }
 
@@ -532,10 +534,35 @@ async function pullSupabaseState() {
   state = localState ? mergeCloudIntoLocal(localState, cloudState) : normalizeState(cloudState);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
-  if (!statesEqual(state, cloudState)) queueSupabaseSync(300);
   updateSupabaseStatus(`已合并本机与云端：${stateSummary(state)}`);
   const deletedCount = Math.max(0, previousCount - state.stocks.length);
   showToast(deletedCount ? `已同步，删除${deletedCount}只` : "已合并本机与云端");
+}
+
+async function replaceWithCloudState() {
+  if (!saveSupabaseConfigFromForm()) return;
+  if (!confirm("将以云端数据替换当前浏览器数据。本机当前数据会先保留备份，确认继续吗？")) return;
+  cancelQueuedSupabaseSync();
+  lastSupabaseError = "";
+  updateSupabaseStatus("云端恢复中");
+  els.replaceFromCloudBtn.disabled = true;
+  try {
+    const cloudState = await loadSupabaseState(true, false, false);
+    if (!cloudState) {
+      updateSupabaseStatus(`恢复失败：${lastSupabaseError || "云端暂无数据"}`);
+      showToast(lastSupabaseError || "云端暂无数据或连接失败");
+      return;
+    }
+    const localState = loadLocalState();
+    if (localState) localStorage.setItem(CLOUD_RESTORE_BACKUP_KEY, JSON.stringify(localState));
+    state = normalizeState(cloudState);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    render();
+    updateSupabaseStatus(`已按云端恢复：${stateSummary(state)}`);
+    showToast("已按云端数据恢复，本机旧数据已备份");
+  } finally {
+    els.replaceFromCloudBtn.disabled = false;
+  }
 }
 
 async function loadSupabaseState(showErrors = false, updateStatus = true, createIfMissing = true) {

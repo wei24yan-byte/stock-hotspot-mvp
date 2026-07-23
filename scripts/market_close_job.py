@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force", action="store_true", help="Run even if the date is not a trading day.")
     parser.add_argument("--offline-demo", action="store_true", help="Generate deterministic demo data without network.")
     parser.add_argument("--news-limit", type=int, default=3, help="News titles to keep per stock.")
+    parser.add_argument("--history-days", type=int, default=60, help="Daily bars to retain per active stock.")
     parser.add_argument("--supabase-url", help="Optional Supabase project URL.")
     parser.add_argument("--supabase-key", help="Optional Supabase anon or service role key.")
     parser.add_argument("--supabase-row-id", default="default", help="Row id in app_state table.")
@@ -69,9 +70,16 @@ def main() -> int:
     news_results = []
 
     for stock in active_stocks:
+        if not args.offline_demo and history_needs_backfill(state, stock["id"], args.history_days):
+            history = fetch_tencent_history(stock, args.history_days)
+            for bar in history:
+                upsert_price(state, stock["id"], bar)
+            if history:
+                print(f"history backfilled: {stock['market']}{stock['code']} {len(history)} bars")
+
         quote = demo_quote(stock, trade_date, state) if args.offline_demo else fetch_sina_quote(stock)
         if quote:
-            upsert_price(state, stock["id"], trade_date.isoformat(), quote["close"], quote["changePct"])
+            upsert_price(state, stock["id"], {"date": trade_date.isoformat(), **quote})
             quote_results.append((stock["name"], quote["close"], quote["changePct"]))
         else:
             print(f"quote unavailable: {stock['market']}{stock['code']} {stock['name']}")
@@ -82,6 +90,7 @@ def main() -> int:
         news_results.extend((stock["name"], item["title"]) for item in stock_news[: args.news_limit])
         time.sleep(0.4 if not args.offline_demo else 0)
 
+    prune_price_history(state, max(20, args.history_days))
     sync_concept_snapshot(state, trade_date)
     build_reports(state, trade_date, holidays)
 
@@ -200,6 +209,7 @@ def normalize_state(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return json.loads(json.dumps(EMPTY_STATE))
     return {
+        **value,
         "stocks": value.get("stocks") if isinstance(value.get("stocks"), list) else [],
         "prices": value.get("prices") if isinstance(value.get("prices"), list) else [],
         "news": value.get("news") if isinstance(value.get("news"), list) else [],
@@ -210,6 +220,7 @@ def normalize_state(value: Any) -> dict[str, Any]:
 
 def normalize_stock(stock: dict[str, Any]) -> dict[str, Any]:
     return {
+        **stock,
         "id": stock.get("id") or make_id(),
         "code": clean_code(stock.get("code", "")),
         "name": str(stock.get("name", "")).strip(),
@@ -286,19 +297,75 @@ def fetch_sina_quote(stock: dict[str, Any]) -> dict[str, float] | None:
     if len(fields) < 32:
         return None
     try:
+        open_price = float(fields[1])
         prev_close = float(fields[2])
         current = float(fields[3])
+        high = float(fields[4])
+        low = float(fields[5])
+        volume = float(fields[8])
+        amount = float(fields[9])
     except ValueError:
         return None
     if current <= 0 or prev_close <= 0:
         return None
-    return {"close": round(current, 2), "changePct": round((current - prev_close) / prev_close * 100, 2)}
+    return {
+        "open": round(open_price, 2),
+        "high": round(high, 2),
+        "low": round(low, 2),
+        "close": round(current, 2),
+        "volume": volume,
+        "amount": amount,
+        "changePct": round((current - prev_close) / prev_close * 100, 2),
+    }
 
 
 def sina_symbol(stock: dict[str, Any]) -> str:
     market = stock["market"].upper()
     prefix = {"SH": "sh", "SZ": "sz", "BJ": "bj"}.get(market, "")
     return f"{prefix}{stock['code']}" if prefix and stock["code"] else ""
+
+
+def fetch_tencent_history(stock: dict[str, Any], history_days: int) -> list[dict[str, float | str]]:
+    symbol = sina_symbol(stock)
+    if not symbol:
+        return []
+    count = max(21, min(180, history_days + 1))
+    params = f"{symbol},day,,,{count},"
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={urllib.parse.quote(params, safe=',')}"
+    request = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://gu.qq.com/"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        print(f"tencent history error for {symbol}: {exc}")
+        return []
+
+    rows = payload.get("data", {}).get(symbol, {}).get("day") or []
+    bars: list[dict[str, float | str]] = []
+    previous_close: float | None = None
+    for row in rows:
+        if not isinstance(row, list) or len(row) < 6:
+            continue
+        try:
+            trade_date, open_price, close, high, low, volume = row[:6]
+            close_value = float(close)
+            bar = {
+                "date": str(trade_date),
+                "open": float(open_price),
+                "high": float(high),
+                "low": float(low),
+                "close": close_value,
+                "volume": float(volume),
+                "amount": None,
+                "changePct": round((close_value - previous_close) / previous_close * 100, 2)
+                if previous_close
+                else None,
+            }
+        except (TypeError, ValueError):
+            continue
+        bars.append(bar)
+        previous_close = close_value
+    return bars[-history_days:]
 
 
 def fetch_public_news(stock: dict[str, Any], limit: int) -> list[dict[str, str]]:
@@ -367,17 +434,50 @@ def latest_price(state: dict[str, Any], stock_id: str) -> dict[str, Any] | None:
     return sorted(prices, key=lambda item: item.get("date", ""))[-1] if prices else None
 
 
-def upsert_price(state: dict[str, Any], stock_id: str, trade_date: str, close: float, change_pct: float) -> None:
+def history_needs_backfill(state: dict[str, Any], stock_id: str, history_days: int) -> bool:
+    required = min(max(20, history_days), 60)
+    complete = [
+        item for item in state["prices"]
+        if item.get("stockId") == stock_id
+        and all(item.get(field) is not None for field in ("high", "low", "close"))
+    ]
+    return len(complete) < required
+
+
+def prune_price_history(state: dict[str, Any], history_days: int) -> None:
+    stock_ids = {stock.get("id") for stock in state["stocks"]}
+    retained = []
+    for stock_id in stock_ids:
+        rows = sorted(
+            [item for item in state["prices"] if item.get("stockId") == stock_id],
+            key=lambda item: item.get("date", ""),
+        )
+        retained.extend(rows[-history_days:])
+    state["prices"] = retained
+
+
+def upsert_price(state: dict[str, Any], stock_id: str, values: dict[str, Any]) -> None:
+    trade_date = str(values.get("date") or "")
+    if not trade_date or values.get("close") is None:
+        return
+    normalized = {
+        "stockId": stock_id,
+        "date": trade_date,
+        "open": values.get("open"),
+        "high": values.get("high"),
+        "low": values.get("low"),
+        "close": values.get("close"),
+        "volume": values.get("volume"),
+        "amount": values.get("amount"),
+        "changePct": values.get("changePct"),
+    }
     for item in state["prices"]:
         if item.get("stockId") == stock_id and item.get("date") == trade_date:
-            item.update({"close": close, "changePct": change_pct})
+            item.update({key: value for key, value in normalized.items() if value is not None})
             return
     state["prices"].append({
         "id": make_id(),
-        "stockId": stock_id,
-        "date": trade_date,
-        "close": close,
-        "changePct": change_pct,
+        **normalized,
     })
 
 

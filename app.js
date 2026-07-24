@@ -1694,9 +1694,10 @@ function buildDailyReportModel(date, period = "daily") {
   [
     ...rows.filter((row) => plannedIds.has(row.stock.id) || row.stock.workflowStatus === "holding"),
     ...gainers,
-    ...decliners
+    ...decliners,
+    ...rows
   ].forEach((row) => {
-    if (!row || focusIds.has(row.stock.id) || focusRows.length >= 10) return;
+    if (!row || focusIds.has(row.stock.id)) return;
     focusIds.add(row.stock.id);
     focusRows.push(row);
   });
@@ -3352,7 +3353,7 @@ function renderLatestDailyReport(report) {
       <section class="report-block">
         <div class="report-block-head">
           <h4>重点复盘</h4>
-          <span>计划股票与强弱两端，最多10只</span>
+          <span>覆盖全部关注股票，计划与强弱表现优先</span>
         </div>
         <div class="report-focus-list">
           ${model.focusRows.map(renderReportFocusRow).join("")}

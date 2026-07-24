@@ -7,6 +7,8 @@ const CLOUD_RESTORE_BACKUP_KEY = "stock-hotspot-backup-before-cloud-v1";
 const AUTO_SYNC_DELAY_MS = 1000;
 const AUTO_SYNC_RETRY_MS = 12000;
 const STOCK_LOOKUP_DELAY_MS = 280;
+const HISTORY_TARGET_DAYS = 60;
+const HISTORY_BACKFILL_CONCURRENCY = 4;
 const MARKET_HOLIDAYS = new Set([]);
 const LEGACY_CREATED_AT_FALLBACK = "1970-01-01T00:00:00.000Z";
 const STOCK_STATUS_OPTIONS = [
@@ -123,6 +125,8 @@ let planStockLookupRequestId = 0;
 let planResolvedStock = null;
 let planResolvedQuery = "";
 let stockDetailsExpanded = false;
+let historyBackfillTimer = 0;
+const historyFetches = new Map();
 const CLIENT_ID = getClientId();
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -132,6 +136,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
   render();
   registerServiceWorker();
+  scheduleImmediateHistoryBackfill();
 });
 
 function bindElements() {
@@ -1264,8 +1269,13 @@ async function addStockFromForm() {
   syncConceptSnapshot();
   saveState();
   render();
-  els.addStockBtn.disabled = false;
-  showToast("已添加");
+  els.addStockBtn.textContent = "补齐日线";
+  try {
+    await prepareStockSuggestion(nextStock);
+  } finally {
+    els.addStockBtn.disabled = false;
+    els.addStockBtn.textContent = "＋ 添加";
+  }
 }
 
 async function seedSamples() {
@@ -1381,6 +1391,158 @@ function upsertPrice(price) {
   } else {
     state.prices.push({ id: makeId(), ...price });
   }
+}
+
+function completeHistoryCount(stockId) {
+  return state.prices.filter(
+    (item) =>
+      item.stockId === stockId &&
+      [item.high, item.low, item.close].every((value) => Number.isFinite(Number(value)))
+  ).length;
+}
+
+function scheduleImmediateHistoryBackfill(delay = 1200) {
+  clearTimeout(historyBackfillTimer);
+  historyBackfillTimer = setTimeout(backfillMissingStockHistories, delay);
+}
+
+async function backfillMissingStockHistories() {
+  const targets = state.stocks.filter(
+    (stock) => stock.active !== false && completeHistoryCount(stock.id) < HISTORY_TARGET_DAYS
+  );
+  if (!targets.length) return;
+
+  let updated = 0;
+  let completed = 0;
+  showToast(`正在补齐日线 0/${targets.length}`, 5000);
+  await mapWithConcurrency(targets, HISTORY_BACKFILL_CONCURRENCY, async (stock) => {
+    try {
+      const result = await ensureRecentStockHistory(stock);
+      const current = state.stocks.find((item) => item.id === stock.id && item.active !== false);
+      if (result.fetched && current) {
+        if (!normalizeStrategy(current.strategy)) current.strategy = recommendedStrategyFor(current);
+        current.updatedAt = new Date().toISOString();
+        updated += 1;
+      }
+    } catch {
+      // The next page load or market-close task will retry unavailable symbols.
+    } finally {
+      completed += 1;
+      showToast(`正在补齐日线 ${completed}/${targets.length}`, 5000);
+    }
+  });
+
+  if (!updated) {
+    showToast("日线暂未补齐，稍后打开页面会重试");
+    return;
+  }
+  saveState();
+  render();
+  showToast(`已补齐 ${updated} 只股票的近期日线`);
+}
+
+async function prepareStockSuggestion(stock) {
+  let historyError = null;
+  try {
+    await ensureRecentStockHistory(stock);
+  } catch (error) {
+    historyError = error;
+  }
+
+  const current = state.stocks.find((item) => item.id === stock.id && item.active !== false);
+  if (!current) return;
+  const historyCount = completeHistoryCount(current.id);
+  if (!normalizeStrategy(current.strategy) && historyCount >= 5) {
+    current.strategy = recommendedStrategyFor(current);
+  }
+  current.updatedAt = new Date().toISOString();
+  saveState();
+  render();
+
+  setView("plans");
+  showPlanEditor(current.id);
+  if (normalizeStrategy(current.strategy) && historyCount >= 5) applySuggestedPlan(false);
+
+  if (historyError || historyCount < 5) {
+    showToast(`${current.name}已添加，日线暂未取到，稍后会自动重试`, 3600);
+  } else {
+    showToast(`${current.name}已补齐${historyCount}日日线，建议已生成待确认`, 3600);
+  }
+}
+
+function ensureRecentStockHistory(stock) {
+  if (!stock?.id || stock.active === false) return Promise.resolve({ fetched: false, count: 0 });
+  const existingCount = completeHistoryCount(stock.id);
+  if (existingCount >= HISTORY_TARGET_DAYS) {
+    return Promise.resolve({ fetched: false, count: existingCount });
+  }
+  if (historyFetches.has(stock.id)) return historyFetches.get(stock.id);
+
+  const request = fetchTencentStockHistory(stock, HISTORY_TARGET_DAYS)
+    .then((bars) => {
+      const current = state.stocks.find((item) => item.id === stock.id && item.active !== false);
+      if (!current || !bars.length) throw new Error("History unavailable");
+      bars.forEach((bar) => upsertPrice({ stockId: current.id, ...bar }));
+      pruneStockHistory(current.id, HISTORY_TARGET_DAYS);
+      return { fetched: true, count: completeHistoryCount(current.id) };
+    })
+    .finally(() => historyFetches.delete(stock.id));
+  historyFetches.set(stock.id, request);
+  return request;
+}
+
+async function fetchTencentStockHistory(stock, days = HISTORY_TARGET_DAYS) {
+  const market = String(stock.market || inferMarket(stock.code)).toLowerCase();
+  const code = cleanCode(stock.code);
+  if (!["sh", "sz", "bj"].includes(market) || code.length !== 6) {
+    throw new Error("Invalid stock identity");
+  }
+
+  const symbol = `${market}${code}`;
+  const count = Math.max(21, Math.min(180, days + 1));
+  const param = `${symbol},day,,,${count},`;
+  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${encodeURIComponent(param)}`;
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`History ${response.status}`);
+  const payload = await response.json();
+  const rows = payload?.data?.[symbol]?.day;
+  if (!Array.isArray(rows) || !rows.length) throw new Error("History empty");
+
+  let previousClose = null;
+  const bars = rows
+    .map((row) => {
+      if (!Array.isArray(row) || row.length < 6) return null;
+      const close = finiteNumberOrNull(row[2]);
+      const bar = {
+        date: String(row[0] || ""),
+        open: finiteNumberOrNull(row[1]),
+        close,
+        high: finiteNumberOrNull(row[3]),
+        low: finiteNumberOrNull(row[4]),
+        volume: finiteNumberOrNull(row[5]),
+        amount: null,
+        changePct:
+          close !== null && previousClose
+            ? round(((close - previousClose) / previousClose) * 100, 2)
+            : null
+      };
+      if (close !== null) previousClose = close;
+      return bar;
+    })
+    .filter(
+      (bar) =>
+        bar?.date &&
+        [bar.open, bar.high, bar.low, bar.close].every((value) => Number.isFinite(Number(value)))
+    );
+  return bars.slice(-days);
+}
+
+function pruneStockHistory(stockId, days = HISTORY_TARGET_DAYS) {
+  const retained = state.prices
+    .filter((item) => item.stockId === stockId)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    .slice(-days);
+  state.prices = state.prices.filter((item) => item.stockId !== stockId).concat(retained);
 }
 
 function upsertNews(news) {
@@ -1615,7 +1777,7 @@ function renderTodayList() {
           const plan = planForStock(stock.id);
           const planState = plan ? planDecisionState(plan, latest) : null;
           return `
-            <article class="today-stock-row">
+            <article class="today-stock-row ${plan ? "has-plan" : "compact-no-plan"}">
               <div class="today-stock-name">
                 <strong>${escapeHtml(stock.name)}</strong>
                 <span>${stock.market}${stock.code} · ${latest?.date || "无行情"}</span>
@@ -1640,7 +1802,7 @@ function renderTodayList() {
                       <span>失效 ${formatOptionalPrice(plan.invalidation)}</span>
                       <strong class="plan-state plan-state-${planState.tone}">${escapeHtml(planState.label)}</strong>
                     </div>`
-                  : `<div class="today-plan-levels no-plan"><span>尚未制定次日计划</span></div>`
+                  : ""
               }
               <button class="today-pin-button ${stock.pinned ? "active" : ""}" data-action="pin-today" data-stock-id="${stock.id}" title="${stock.pinned ? "取消置顶" : "置顶"}" aria-label="${stock.pinned ? "取消置顶" : "置顶"}">${stock.pinned ? "取消" : "置顶"}</button>
             </article>
@@ -2400,6 +2562,7 @@ async function addPlanStockFromPlan() {
     state.stocks.unshift(stock);
   }
 
+  els.addPlanStockBtn.textContent = "补齐日线";
   const quote = await fetchStockQuote(stock.code, stock.market).catch(() => null);
   if (quote?.close && quote.changePct !== null) {
     if (quote.name) stock.name = quote.name;
@@ -2423,10 +2586,10 @@ async function addPlanStockFromPlan() {
   render();
   setView("plans");
   setPlanSection("plans");
-  showPlanEditor(stock.id);
+  await prepareStockSuggestion(stock);
   els.addPlanStockBtn.disabled = false;
   els.addPlanStockBtn.textContent = "添加并选中";
-  showToast(existed ? "股票已选中并设为明日计划" : "已加入股票池并选中");
+  if (existed) showToast("股票已选中，建议已生成待确认");
 }
 
 function resetPlanStockAddForm() {
@@ -2478,7 +2641,7 @@ function updatePlanSuggestionPrompt() {
     `${stock.name}当前有 ${historyCount} 个交易日记录；点击“生成建议”后只会填入表单，不会自动交易。`;
 }
 
-function applySuggestedPlan() {
+function applySuggestedPlan(showMessage = true) {
   const stock = state.stocks.find((item) => item.id === els.planStock.value);
   const strategy = normalizeStrategy(els.planStrategy.value);
   if (!stock) {
@@ -2498,7 +2661,7 @@ function applySuggestedPlan() {
   const suggestion = suggestedPlanFor(stock, strategy, settings);
   if (!suggestion.ok) {
     els.planSuggestionResult.innerHTML = `<strong class="negative">暂时无法计算</strong><span>${escapeHtml(suggestion.reason)}</span>`;
-    showToast(suggestion.reason);
+    if (showMessage) showToast(suggestion.reason);
     return;
   }
 
@@ -2525,7 +2688,7 @@ function applySuggestedPlan() {
     <span>买入 ${formatNumber(suggestion.entryLow)}–${formatNumber(suggestion.entryHigh)}，失效 ${formatNumber(suggestion.invalidation)}，目标 ${formatNumber(suggestion.target1)} / ${formatNumber(suggestion.target2)}，${escapeHtml(positionText)}。</span>
     <small>${escapeHtml(suggestion.basis)}</small>
   `;
-  showToast("建议参数已填入，请确认后保存");
+  if (showMessage) showToast("建议参数已填入，请确认后保存");
 }
 
 function suggestedPlanFor(stock, strategy, settings) {
@@ -2672,6 +2835,34 @@ function suggestedPlanFor(stock, strategy, settings) {
     trailingRule: strategy === "breakout" || strategy === "breakout_retest" ? "breakeven" : "structure",
     maxHoldDays: strategy === "event" || strategy === "rebound" ? 3 : 5
   };
+}
+
+function recommendedStrategyFor(stock) {
+  const history = state.prices
+    .filter((item) => item.stockId === stock.id && Number.isFinite(Number(item.close)))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    .slice(-HISTORY_TARGET_DAYS);
+  if (history.length < 5) return "trend_pullback";
+
+  const closes = history.map((item) => Number(item.close));
+  const latest = closes.at(-1);
+  const ma10 = average(closes.slice(-10));
+  const ma20 = average(closes.slice(-20));
+  const reference = history.slice(0, -1).slice(-20);
+  const referenceHigh = Math.max(
+    ...reference.map((item) => Number.isFinite(Number(item.high)) ? Number(item.high) : Number(item.close))
+  );
+  const referenceLow = Math.min(
+    ...reference.map((item) => Number.isFinite(Number(item.low)) ? Number(item.low) : Number(item.close))
+  );
+  const range = Math.max(referenceHigh - referenceLow, latest * 0.01);
+  const fiveDayBase = closes[Math.max(0, closes.length - 6)];
+  const fiveDayChange = fiveDayBase > 0 ? (latest / fiveDayBase - 1) * 100 : 0;
+
+  if (latest >= referenceHigh * 0.985 && ma10 >= ma20) return "breakout_retest";
+  if (fiveDayChange <= -8 && latest <= ma10) return "rebound";
+  if (latest <= referenceLow + range * 0.3) return "support_rebound";
+  return "trend_pullback";
 }
 
 function defaultEntryLogicForStrategy(strategy) {

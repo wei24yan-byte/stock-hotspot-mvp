@@ -1,0 +1,60 @@
+name: Market close update
+
+on:
+  schedule:
+    # GitHub cron uses UTC. 08:20 UTC is 16:20 in China Standard Time.
+    - cron: "20 8 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "Optional trade date, YYYY-MM-DD"
+        required: false
+        type: string
+      offline_demo:
+        description: "Use deterministic demo data instead of live free sources"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  market-close:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run market close updater
+        run: |
+          args=(--state data/state.json --holidays data/cn_market_holidays.csv --supabase-row-id primary-v2)
+          if [ -n "${{ github.event.inputs.trade_date }}" ]; then
+            args+=(--date "${{ github.event.inputs.trade_date }}")
+          fi
+          if [ "${{ github.event.inputs.offline_demo }}" = "true" ]; then
+            args+=(--offline-demo --force)
+          fi
+          if [ -n "${{ secrets.SUPABASE_URL }}" ] && [ -n "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" ]; then
+            args+=(--supabase-url "${{ secrets.SUPABASE_URL }}" --supabase-key "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}")
+          fi
+          python scripts/market_close_job.py "${args[@]}"
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- data/state.json; then
+            git add data/state.json
+            git commit -m "chore: update market close data"
+            git push
+          else
+            echo "No data changes to commit."
+          fi

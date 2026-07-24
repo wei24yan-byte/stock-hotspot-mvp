@@ -354,6 +354,15 @@ textarea {
   background: #fff;
 }
 
+.today-stock-row.compact-no-plan {
+  grid-template-columns: 1.2fr 0.7fr 0.7fr 1.2fr 58px;
+  padding-block: 7px;
+}
+
+.today-stock-row.compact-no-plan .today-pin-button {
+  grid-column: 5;
+}
+
 .today-pin-button {
   grid-column: 6;
   grid-row: 1;
@@ -2485,6 +2494,12 @@ td:nth-child(9) {
     grid-template-columns: repeat(4, minmax(0, 1fr)) 42px;
     gap: 5px;
     padding: 8px;
+  }
+
+  .today-stock-row.compact-no-plan {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) 42px;
+    gap: 4px;
+    padding-block: 6px;
   }
 
   .today-pin-button {

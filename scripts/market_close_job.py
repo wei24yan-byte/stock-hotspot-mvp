@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--history-days", type=int, default=60, help="Daily bars to retain per active stock.")
     parser.add_argument("--supabase-url", help="Optional Supabase project URL.")
     parser.add_argument("--supabase-key", help="Optional Supabase anon or service role key.")
-    parser.add_argument("--supabase-row-id", default="default", help="Row id in app_state table.")
+    parser.add_argument("--supabase-row-id", default="primary-v2", help="Row id in app_state table.")
     parser.add_argument("--dry-run", action="store_true", help="Print summary without writing state.")
     return parser.parse_args()
 

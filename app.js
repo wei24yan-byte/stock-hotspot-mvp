@@ -1,6 +1,11 @@
 const STORAGE_KEY = "stock-hotspot-mvp-v1";
 const SUPABASE_CONFIG_KEY = "stock-hotspot-supabase-config-v1";
 const SUPABASE_STATE_ROW_ID = "primary-v2";
+const DEFAULT_SUPABASE_CONFIG = {
+  url: "https://ctbvxztqhosjoswiainz.supabase.co",
+  anonKey:
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0YnZ4enRxaG9zam9zd2lhaW56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NDY3OTUsImV4cCI6MjA5ODIyMjc5NX0.3aECjSBDCoAuK14q_Hlcqv7wiHeFuppJQ8phRCwnsCo"
+};
 const API_STATE_URL = "./api/state";
 const STATIC_STATE_URL = "./data/state.json";
 const CLOUD_RESTORE_BACKUP_KEY = "stock-hotspot-backup-before-cloud-v1";
@@ -126,6 +131,8 @@ let planResolvedStock = null;
 let planResolvedQuery = "";
 let stockDetailsExpanded = false;
 let historyBackfillTimer = 0;
+let historyBackfillIdleHandle = 0;
+let activeView = "today";
 const historyFetches = new Map();
 const CLIENT_ID = getClientId();
 
@@ -487,9 +494,9 @@ function getSupabaseConfig() {
     const config = JSON.parse(localStorage.getItem(SUPABASE_CONFIG_KEY) || "{}");
     const url = String(config.url || "").replace(/\/+$/, "");
     const anonKey = String(config.anonKey || "").trim();
-    return url && anonKey ? { url, anonKey } : null;
+    return url && anonKey ? { url, anonKey } : { ...DEFAULT_SUPABASE_CONFIG };
   } catch {
-    return null;
+    return { ...DEFAULT_SUPABASE_CONFIG };
   }
 }
 
@@ -1185,12 +1192,14 @@ function setDefaultDates() {
 }
 
 function setView(viewName) {
+  activeView = ["dashboard", "today", "plans", "stocks", "reports"].includes(viewName) ? viewName : "today";
   document.querySelectorAll(".tab").forEach((tab) => {
-    tab.classList.toggle("active", tab.dataset.view === viewName);
+    tab.classList.toggle("active", tab.dataset.view === activeView);
   });
   document.querySelectorAll(".view").forEach((view) => {
-    view.classList.toggle("active", view.id === `${viewName}View`);
+    view.classList.toggle("active", view.id === `${activeView}View`);
   });
+  renderActiveView();
 }
 
 function setPlanSection(sectionName) {
@@ -1401,9 +1410,24 @@ function completeHistoryCount(stockId) {
   ).length;
 }
 
-function scheduleImmediateHistoryBackfill(delay = 1200) {
+function scheduleImmediateHistoryBackfill(delay = 1800) {
   clearTimeout(historyBackfillTimer);
-  historyBackfillTimer = setTimeout(backfillMissingStockHistories, delay);
+  if (historyBackfillIdleHandle && "cancelIdleCallback" in window) {
+    window.cancelIdleCallback(historyBackfillIdleHandle);
+  }
+  historyBackfillTimer = setTimeout(() => {
+    if ("requestIdleCallback" in window) {
+      historyBackfillIdleHandle = window.requestIdleCallback(
+        () => {
+          historyBackfillIdleHandle = 0;
+          backfillMissingStockHistories();
+        },
+        { timeout: 2500 }
+      );
+      return;
+    }
+    backfillMissingStockHistories();
+  }, delay);
 }
 
 async function backfillMissingStockHistories() {
@@ -1744,17 +1768,33 @@ function compactRiskReason(reason) {
 }
 
 function render() {
-  renderTodayList();
-  renderMarketFreshness();
-  renderMetrics();
-  renderStockTable();
-  renderConcepts();
-  renderStockCards();
-  renderPlanWorkspace();
-  renderReviewMetrics();
-  renderTradeLogs();
-  renderSnapshots();
-  renderReports();
+  renderActiveView();
+}
+
+function renderActiveView() {
+  if (activeView === "today") {
+    renderTodayList();
+    renderMarketFreshness();
+    return;
+  }
+  if (activeView === "dashboard") {
+    renderMetrics();
+    renderStockTable();
+    renderConcepts();
+    return;
+  }
+  if (activeView === "stocks") {
+    renderStockCards();
+    return;
+  }
+  if (activeView === "plans") {
+    renderPlanWorkspace();
+    renderReviewMetrics();
+    renderTradeLogs();
+    renderSnapshots();
+    return;
+  }
+  if (activeView === "reports") renderReports();
 }
 
 function renderTodayList() {

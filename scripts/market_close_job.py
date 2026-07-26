@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--offline-demo", action="store_true", help="Generate deterministic demo data without network.")
     parser.add_argument("--news-limit", type=int, default=3, help="News titles to keep per stock.")
     parser.add_argument("--history-days", type=int, default=60, help="Daily bars to retain per active stock.")
+    parser.add_argument("--history-only", action="store_true", help="Only backfill missing daily history in Supabase.")
     parser.add_argument("--supabase-url", help="Optional Supabase project URL.")
     parser.add_argument("--supabase-key", help="Optional Supabase anon or service role key.")
     parser.add_argument("--supabase-row-id", default="primary-v2", help="Row id in app_state table.")
@@ -55,16 +56,22 @@ def main() -> int:
     trade_date = parse_date(args.date) if args.date else today_shanghai()
     holidays = load_holidays(Path(args.holidays))
 
-    if not args.force and not is_trading_day(trade_date, holidays):
+    if not args.history_only and not args.force and not is_trading_day(trade_date, holidays):
         print(f"{trade_date} is not a trading day. Skip.")
         return 0
 
     state = load_state(state_path)
     cloud_state = pull_supabase_state(args.supabase_url, args.supabase_key, args.supabase_row_id)
+    if args.history_only and not cloud_state:
+        print("history backfill requires a readable Supabase state", file=sys.stderr)
+        return 1
     if cloud_state:
         state = cloud_state
     active_stocks = [normalize_stock(stock) for stock in state["stocks"] if stock.get("active", True)]
     state["stocks"] = [normalize_stock(stock) for stock in state["stocks"]]
+
+    if args.history_only:
+        return run_history_backfill(args, state_path, state, active_stocks)
 
     quote_results = []
     news_results = []
@@ -102,6 +109,76 @@ def main() -> int:
     if args.supabase_url and args.supabase_key:
         push_supabase_state(args.supabase_url, args.supabase_key, args.supabase_row_id, state)
     print_summary(quote_results, news_results, state)
+    return 0
+
+
+def run_history_backfill(
+    args: argparse.Namespace,
+    state_path: Path,
+    state: dict[str, Any],
+    active_stocks: list[dict[str, Any]],
+) -> int:
+    targets = [
+        stock
+        for stock in active_stocks
+        if history_needs_backfill(state, stock["id"], args.history_days)
+    ]
+    if not targets:
+        print(f"history already complete: {len(active_stocks)} active stocks")
+        return 0
+
+    fetched_by_identity: dict[tuple[str, str], list[dict[str, float | str]]] = {}
+    for stock in targets:
+        bars = fetch_tencent_history(stock, args.history_days)
+        if bars:
+            fetched_by_identity[(stock["market"], stock["code"])] = bars
+            print(f"history fetched: {stock['market']}{stock['code']} {len(bars)} bars")
+        else:
+            print(f"history unavailable: {stock['market']}{stock['code']} {stock['name']}")
+        time.sleep(0.15)
+
+    if not fetched_by_identity:
+        print("no missing history could be fetched", file=sys.stderr)
+        return 1
+
+    latest_cloud = pull_supabase_state(args.supabase_url, args.supabase_key, args.supabase_row_id)
+    if not latest_cloud:
+        print("latest Supabase state could not be reloaded", file=sys.stderr)
+        return 1
+
+    latest_cloud["stocks"] = [normalize_stock(stock) for stock in latest_cloud["stocks"]]
+    applied = 0
+    for stock in latest_cloud["stocks"]:
+        if stock.get("active", True) is False:
+            continue
+        bars = fetched_by_identity.get((stock["market"], stock["code"]))
+        if not bars:
+            continue
+        for bar in bars:
+            upsert_price(latest_cloud, stock["id"], bar)
+        applied += 1
+
+    if not applied:
+        print("fetched history no longer matches an active cloud stock")
+        return 0
+
+    prune_price_history(latest_cloud, max(20, args.history_days))
+    touch_sync_meta(latest_cloud, "github-actions-history")
+
+    if args.dry_run:
+        print(
+            f"history dry run: targets={len(targets)}, fetched={len(fetched_by_identity)}, "
+            f"applied={applied}, prices={len(latest_cloud['prices'])}"
+        )
+        return 0
+
+    save_state(state_path, latest_cloud)
+    if not push_supabase_state(args.supabase_url, args.supabase_key, args.supabase_row_id, latest_cloud):
+        return 1
+    print(
+        f"history backfill complete: targets={len(targets)}, fetched={len(fetched_by_identity)}, "
+        f"applied={applied}, prices={len(latest_cloud['prices'])}"
+    )
     return 0
 
 
@@ -179,7 +256,7 @@ def pull_supabase_state(url: str | None, key: str | None, row_id: str) -> dict[s
     return None
 
 
-def push_supabase_state(url: str, key: str, row_id: str, state: dict[str, Any]) -> None:
+def push_supabase_state(url: str, key: str, row_id: str, state: dict[str, Any]) -> bool:
     endpoint = f"{url.rstrip('/')}/rest/v1/app_state?on_conflict=id"
     body = json.dumps([{"id": row_id, "data": normalize_state(state)}], ensure_ascii=False).encode("utf-8")
     headers = {
@@ -193,8 +270,10 @@ def push_supabase_state(url: str, key: str, row_id: str, state: dict[str, Any]) 
             if response.status not in (200, 201, 204):
                 raise RuntimeError(f"unexpected status {response.status}")
         print("supabase state pushed")
+        return True
     except (urllib.error.URLError, TimeoutError, RuntimeError) as exc:
         print(f"supabase push failed: {exc}")
+        return False
 
 
 def supabase_headers(key: str) -> dict[str, str]:
@@ -202,6 +281,15 @@ def supabase_headers(key: str) -> dict[str, str]:
         **DEFAULT_HEADERS,
         "apikey": key,
         "Authorization": f"Bearer {key}",
+    }
+
+
+def touch_sync_meta(state: dict[str, Any], client_id: str) -> None:
+    state["syncMeta"] = {
+        **(state.get("syncMeta") if isinstance(state.get("syncMeta"), dict) else {}),
+        "clientId": client_id,
+        "schemaVersion": 2,
+        "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
     }
 
 

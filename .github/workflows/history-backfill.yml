@@ -1,0 +1,37 @@
+name: History backfill
+
+on:
+  schedule:
+    # Every 30 minutes from 08:00 through 00:59 China Standard Time.
+    - cron: "7,37 0-16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  history-backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Backfill missing daily history
+        env:
+          SUPABASE_URL: "https://ctbvxztqhosjoswiainz.supabase.co"
+          SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0YnZ4enRxaG9zam9zd2lhaW56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NDY3OTUsImV4cCI6MjA5ODIyMjc5NX0.3aECjSBDCoAuK14q_Hlcqv7wiHeFuppJQ8phRCwnsCo"
+        run: |
+          python scripts/market_close_job.py \
+            --state data/state.json \
+            --history-only \
+            --history-days 60 \
+            --supabase-url "$SUPABASE_URL" \
+            --supabase-key "$SUPABASE_ANON_KEY" \
+            --supabase-row-id primary-v2

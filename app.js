@@ -1,6 +1,7 @@
 const STORAGE_KEY = "stock-hotspot-mvp-v1";
 const SUPABASE_CONFIG_KEY = "stock-hotspot-supabase-config-v1";
 const SUPABASE_STATE_ROW_ID = "primary-v2";
+const V85_SCHEMA_VERSION = 85;
 const DEFAULT_SUPABASE_CONFIG = {
   url: "https://ctbvxztqhosjoswiainz.supabase.co",
   anonKey:
@@ -13,7 +14,15 @@ const AUTO_SYNC_DELAY_MS = 1000;
 const AUTO_SYNC_RETRY_MS = 12000;
 const STOCK_LOOKUP_DELAY_MS = 280;
 const HISTORY_TARGET_DAYS = 60;
-const MARKET_HOLIDAYS = new Set([]);
+const MARKET_HOLIDAYS = new Set([
+  "2026-01-01", "2026-01-02",
+  "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-23",
+  "2026-04-06",
+  "2026-05-01", "2026-05-04", "2026-05-05",
+  "2026-06-19",
+  "2026-09-25",
+  "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07"
+]);
 const LEGACY_CREATED_AT_FALLBACK = "1970-01-01T00:00:00.000Z";
 const STOCK_STATUS_OPTIONS = [
   ["watch", "观察中"],
@@ -130,14 +139,24 @@ let planResolvedStock = null;
 let planResolvedQuery = "";
 let stockDetailsExpanded = false;
 let activeView = "today";
+let v85Cloud = null;
+let v85CoreLoaded = false;
+const v85HistoryLoads = new Map();
 const CLIENT_ID = getClientId();
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindElements();
+  initializeV85Cloud();
+  const signedInFromLink = v85Cloud?.consumeAuthRedirect() || false;
   state = await loadState();
   setDefaultDates();
   bindEvents();
   render();
+  renderV85Account();
+  if (signedInFromLink) {
+    showToast("登录成功，正在读取 V85 数据");
+    setTimeout(refreshV85CoreAfterStartup, 0);
+  }
   registerServiceWorker();
 });
 
@@ -220,6 +239,8 @@ function bindElements() {
     "reviewExecuted",
     "reviewSkipped",
     "reviewDiscipline",
+    "reviewUnrealizedPnl",
+    "reviewRealizedPnl",
     "tradeStock",
     "tradeAction",
     "tradePrice",
@@ -235,6 +256,11 @@ function bindElements() {
     "pullSupabaseBtn",
     "replaceFromCloudBtn",
     "supabaseStatus",
+    "v85AuthEmail",
+    "v85SendLinkBtn",
+    "v85SignOutBtn",
+    "v85MigrateBtn",
+    "v85AccountStatus",
     "exportBtn",
     "importFile",
     "rebuildBtn",
@@ -297,6 +323,9 @@ function bindEvents() {
   els.saveSupabaseBtn.addEventListener("click", saveSupabaseConfig);
   els.pullSupabaseBtn.addEventListener("click", pullSupabaseState);
   els.replaceFromCloudBtn.addEventListener("click", replaceWithCloudState);
+  els.v85SendLinkBtn.addEventListener("click", sendV85MagicLink);
+  els.v85SignOutBtn.addEventListener("click", signOutV85);
+  els.v85MigrateBtn.addEventListener("click", migrateLegacyToV85);
   els.exportBtn.addEventListener("click", exportData);
   els.importFile.addEventListener("change", importData);
   els.rebuildBtn.addEventListener("click", rebuildConcepts);
@@ -314,9 +343,87 @@ function emptyState() {
     tradeLogs: [],
     snapshots: [],
     riskSettings: { ...DEFAULT_RISK_SETTINGS },
+    marketContext: {},
     deletedStocks: [],
     syncMeta: {}
   };
+}
+
+function initializeV85Cloud() {
+  const config = getSupabaseConfig();
+  v85Cloud = window.MarketRadarCloud?.create(config) || null;
+}
+
+function renderV85Account(message = "") {
+  if (!els.v85AccountStatus) return;
+  const authenticated = v85Cloud?.isAuthenticated();
+  const email = authenticated ? v85Cloud.sessionEmail() : "";
+  els.v85AccountStatus.textContent =
+    message ||
+    (authenticated
+      ? `已登录 ${email || "当前账户"} · V85 增量同步已启用`
+      : "尚未登录，当前继续使用本机数据；登录后手机与电脑使用同一账户。");
+  els.v85SignOutBtn.hidden = !authenticated;
+  els.v85MigrateBtn.hidden = !authenticated;
+  els.v85SendLinkBtn.hidden = authenticated;
+  els.v85AuthEmail.disabled = authenticated;
+  if (email) els.v85AuthEmail.value = email;
+}
+
+async function sendV85MagicLink() {
+  if (!saveSupabaseConfigFromForm()) return;
+  initializeV85Cloud();
+  const email = String(els.v85AuthEmail.value || "").trim();
+  if (!email || !email.includes("@")) {
+    showToast("请填写正确的登录邮箱");
+    return;
+  }
+  els.v85SendLinkBtn.disabled = true;
+  renderV85Account("正在发送登录邮件…");
+  try {
+    await v85Cloud.sendMagicLink(email, `${location.origin}${location.pathname}${location.search}`);
+    renderV85Account("登录邮件已发送，请在同一设备打开邮件中的链接");
+    showToast("登录邮件已发送");
+  } catch (error) {
+    renderV85Account(`发送失败：${friendlyV85Error(error)}`);
+  } finally {
+    els.v85SendLinkBtn.disabled = false;
+  }
+}
+
+async function signOutV85() {
+  await v85Cloud?.signOut();
+  v85CoreLoaded = false;
+  v85HistoryLoads.clear();
+  renderV85Account("已退出 V85 账户，本机数据仍保留");
+  updateSupabaseStatus("本机存储");
+}
+
+async function migrateLegacyToV85() {
+  if (!v85Cloud?.isAuthenticated()) {
+    showToast("请先登录 V85");
+    return;
+  }
+  if (!confirm("将旧版云端 primary-v2 数据复制到当前 V85 账户。旧数据不会删除，确认继续吗？")) return;
+  els.v85MigrateBtn.disabled = true;
+  renderV85Account("正在读取并迁移 V84 数据…");
+  try {
+    const legacy = await v85Cloud.loadLegacyState(SUPABASE_STATE_ROW_ID);
+    if (!legacy) throw new Error("旧版云端暂无数据");
+    const normalized = normalizeState(legacy);
+    const result = await v85Cloud.migrateLegacyState(normalized);
+    localStorage.setItem(CLOUD_RESTORE_BACKUP_KEY, JSON.stringify(loadLocalState() || state));
+    state = normalized;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    v85CoreLoaded = true;
+    render();
+    renderV85Account(`迁移完成：${result.counts.stocks}只股票，${result.counts.prices}条日线`);
+    updateSupabaseStatus("V85 迁移完成");
+  } catch (error) {
+    renderV85Account(`迁移失败：${friendlyV85Error(error)}`);
+  } finally {
+    els.v85MigrateBtn.disabled = false;
+  }
 }
 
 async function loadState() {
@@ -326,12 +433,22 @@ async function loadState() {
   const hasSupabaseConfig = Boolean(getSupabaseConfig());
 
   if (localState) {
-    updateSupabaseStatus(hasSupabaseConfig ? "本机数据已载入，云端同步中" : "本机存储");
-    if (hasSupabaseConfig) setTimeout(refreshCloudAfterStartup, 0);
+    updateSupabaseStatus(v85Cloud?.isAuthenticated() ? "本机数据已载入，V85 后台同步中" : "本机数据已载入");
+    if (v85Cloud?.isAuthenticated()) setTimeout(refreshV85CoreAfterStartup, 0);
     return localState;
   }
 
-  const cloudState = await loadSupabaseState();
+  if (v85Cloud?.isAuthenticated()) {
+    const dashboardState = await withTimeout(v85Cloud.loadDashboardState(), 1800, null).catch(() => null);
+    if (dashboardState) {
+      updateSupabaseStatus("V85 轻量首页");
+      setTimeout(refreshV85CoreAfterStartup, 0);
+      return normalizeState(dashboardState);
+    }
+  }
+
+  const legacyCloudPromise = loadSupabaseState(false, false, false);
+  const cloudState = await withTimeout(legacyCloudPromise, 1200, null);
   if (cloudState) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudState));
     updateSupabaseStatus(`已读取云端：${stateSummary(cloudState)}`);
@@ -351,7 +468,9 @@ async function loadState() {
   try {
     const response = await fetch(`${STATIC_STATE_URL}?t=${Date.now()}`, { cache: "no-store" });
     if (response.ok) {
-      return normalizeState(await response.json());
+      const staticState = normalizeState(await response.json());
+      if (hasSupabaseConfig) void legacyCloudPromise.then((value) => refreshCloudAfterStartup(value));
+      return staticState;
     }
   } catch {
     // Static hosting may not have a seeded data file yet.
@@ -360,8 +479,33 @@ async function loadState() {
   return fallback;
 }
 
-async function refreshCloudAfterStartup() {
-  const cloudState = await loadSupabaseState(false, false, false);
+async function refreshV85CoreAfterStartup() {
+  if (!v85Cloud?.isAuthenticated()) return;
+  try {
+    const cloudState = await v85Cloud.loadCoreState();
+    if (!cloudState) return;
+    const localState = loadLocalState() || state;
+    const cloudHasData = cloudState.stocks.length || cloudState.plans.length || cloudState.tradeLogs.length;
+    state = cloudHasData ? normalizeState(cloudState) : normalizeState(localState);
+    v85CoreLoaded = true;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    render();
+    updateSupabaseStatus(cloudHasData ? `V85 已同步 · ${stateSummary(state)}` : "V85 云端为空，请手动迁移 V84 数据");
+    renderV85Account(cloudHasData ? "" : "V85 云端为空；请点击“迁移 V84 数据”，不会自动覆盖或复活旧股票。");
+  } catch (error) {
+    updateSupabaseStatus(`V85 后台同步失败：${friendlyV85Error(error)}`);
+  }
+}
+
+function withTimeout(promise, timeoutMs, fallbackValue) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallbackValue), timeoutMs))
+  ]);
+}
+
+async function refreshCloudAfterStartup(prefetchedState) {
+  const cloudState = prefetchedState || await loadSupabaseState(false, false, false);
   if (!cloudState) {
     updateSupabaseStatus("新云端空间待上传，已保留本机数据");
     queueSupabaseSync(300);
@@ -396,7 +540,7 @@ function saveState() {
   state.syncMeta = {
     ...(state.syncMeta || {}),
     clientId: CLIENT_ID,
-    schemaVersion: 2,
+    schemaVersion: v85Cloud?.isAuthenticated() ? V85_SCHEMA_VERSION : 2,
     updatedAt: new Date().toISOString()
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -413,7 +557,7 @@ function saveState() {
 }
 
 function queueSupabaseSync(delay = AUTO_SYNC_DELAY_MS) {
-  if (!getSupabaseConfig()) {
+  if (!getSupabaseConfig() || (!v85Cloud?.isAuthenticated() && !getSupabaseConfig())) {
     updateSupabaseStatus("未连接");
     return;
   }
@@ -443,7 +587,16 @@ async function runSupabaseSave(snapshotFactory, forceStatus = false) {
   autoSyncInFlight = true;
   try {
     const snapshot = typeof snapshotFactory === "function" ? snapshotFactory() : snapshotFactory;
+    if (v85Cloud?.isAuthenticated()) {
+      await v85Cloud.saveState(snapshot, { includeHistory: true });
+      if (forceStatus) updateSupabaseStatus("V85 已同步");
+      lastSupabaseError = "";
+      return true;
+    }
     return await saveSupabaseState(snapshot, forceStatus);
+  } catch (error) {
+    lastSupabaseError = friendlyV85Error(error);
+    return false;
   } finally {
     autoSyncInFlight = false;
   }
@@ -500,6 +653,7 @@ function loadSupabaseForm() {
   if (els.supabaseUrl) els.supabaseUrl.value = config?.url || "";
   if (els.supabaseAnonKey) els.supabaseAnonKey.value = config?.anonKey || "";
   updateSupabaseStatus(config ? "已配置" : "未连接");
+  if (v85Cloud) renderV85Account();
 }
 
 function updateSupabaseStatus(text) {
@@ -520,6 +674,7 @@ function saveSupabaseConfigFromForm() {
     return null;
   }
   localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify(config));
+  if (window.MarketRadarCloud) v85Cloud = window.MarketRadarCloud.create(config);
   return config;
 }
 
@@ -547,7 +702,12 @@ async function pullSupabaseState() {
   if (!saveSupabaseConfigFromForm()) return;
   lastSupabaseError = "";
   updateSupabaseStatus("读取中");
-  const cloudState = await loadSupabaseState(true);
+  const cloudState = v85Cloud?.isAuthenticated()
+    ? await v85Cloud.loadCoreState().catch((error) => {
+        lastSupabaseError = friendlyV85Error(error);
+        return null;
+      })
+    : await loadSupabaseState(true);
   if (!cloudState) {
     updateSupabaseStatus(`读取失败：${lastSupabaseError || "云端暂无数据"}`);
     showToast(lastSupabaseError || "云端暂无数据或连接失败");
@@ -558,7 +718,7 @@ async function pullSupabaseState() {
   state = normalizeState(cloudState);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
-  updateSupabaseStatus(`已读取云端主数据：${stateSummary(state)}`);
+  updateSupabaseStatus(`已读取${v85Cloud?.isAuthenticated() ? " V85" : ""}云端主数据：${stateSummary(state)}`);
   showToast("已读取云端主数据，本机旧数据已备份");
 }
 
@@ -570,7 +730,12 @@ async function replaceWithCloudState() {
   updateSupabaseStatus("云端恢复中");
   els.replaceFromCloudBtn.disabled = true;
   try {
-    const cloudState = await loadSupabaseState(true, false, false);
+    const cloudState = v85Cloud?.isAuthenticated()
+      ? await v85Cloud.loadCoreState().catch((error) => {
+          lastSupabaseError = friendlyV85Error(error);
+          return null;
+        })
+      : await loadSupabaseState(true, false, false);
     if (!cloudState) {
       updateSupabaseStatus(`恢复失败：${lastSupabaseError || "云端暂无数据"}`);
       showToast(lastSupabaseError || "云端暂无数据或连接失败");
@@ -691,6 +856,18 @@ function friendlySupabaseError(error) {
   return message.length > 80 ? `${message.slice(0, 80)}...` : message;
 }
 
+function friendlyV85Error(error) {
+  const message = String(error?.message || error || "连接失败");
+  if (message.includes("radar_entities") || message.includes("radar_migrations")) {
+    return "V85 数据表尚未创建，请先运行 docs/supabase-v85.sql";
+  }
+  if (message.includes("401") || message.includes("403") || message.includes("JWT")) {
+    return "登录已失效或权限不足，请重新登录";
+  }
+  if (message.includes("Failed to fetch")) return "网络暂时无法连接 Supabase";
+  return message.length > 100 ? `${message.slice(0, 100)}…` : message;
+}
+
 function normalizeState(value) {
   const legacyConcepts = Array.isArray(value?.concepts) ? value.concepts : [];
   const deletedStocks = Array.isArray(value?.deletedStocks) ? value.deletedStocks : [];
@@ -706,6 +883,7 @@ function normalizeState(value) {
     tradeLogs: Array.isArray(value?.tradeLogs) ? value.tradeLogs.map(normalizeTradeLog) : [],
     snapshots: Array.isArray(value?.snapshots) ? value.snapshots.map(normalizeSnapshot) : [],
     riskSettings: normalizeRiskSettings(value?.riskSettings),
+    marketContext: value?.marketContext && typeof value.marketContext === "object" ? value.marketContext : {},
     deletedStocks: dedupeDeletedStocks(deletedStocks).filter((item) => item.id || item.code),
     syncMeta: value?.syncMeta && typeof value.syncMeta === "object" ? value.syncMeta : {}
   };
@@ -753,7 +931,10 @@ function normalizeStock(stock, legacyConcepts = []) {
     pinned: stock?.pinned === true,
     workflowStatus: normalizeWorkflowStatus(stock?.workflowStatus || stock?.status),
     strategy: normalizeStrategy(stock?.strategy),
-    concepts
+    concepts,
+    marketSummary: stock?.marketSummary && typeof stock.marketSummary === "object"
+      ? stock.marketSummary
+      : null
   };
 }
 
@@ -769,6 +950,7 @@ function normalizePlan(item) {
     stockId,
     date,
     strategy: normalizeStrategy(item?.strategy),
+    strategyVersion: String(item?.strategyVersion || "legacy"),
     entryLow: finiteNumberOrNull(item?.entryLow),
     entryHigh: finiteNumberOrNull(item?.entryHigh),
     invalidation: finiteNumberOrNull(item?.invalidation),
@@ -889,6 +1071,12 @@ function mergeStates(primary, secondary, options = {}) {
       existing.workflowStatus = normalizeWorkflowStatus(stock.workflowStatus);
       existing.strategy = normalizeStrategy(stock.strategy);
     }
+    if (
+      stock.marketSummary &&
+      timestampValue(stock.marketSummary.computedAt) >= timestampValue(existing.marketSummary?.computedAt)
+    ) {
+      existing.marketSummary = stock.marketSummary;
+    }
     existing.concepts = normalizeConceptList([...(existing.concepts || []), ...(stock.concepts || [])]);
   });
 
@@ -920,6 +1108,7 @@ function mergeStates(primary, secondary, options = {}) {
     tradeLogs,
     snapshots,
     riskSettings: base.riskSettings,
+    marketContext: incoming.marketContext?.regime ? incoming.marketContext : base.marketContext,
     deletedStocks
   };
   syncConceptSnapshotForState(merged);
@@ -1195,6 +1384,61 @@ function setView(viewName) {
     view.classList.toggle("active", view.id === `${activeView}View`);
   });
   renderActiveView();
+  if (["dashboard", "plans", "reports"].includes(activeView)) {
+    void ensureVisibleHistoriesLoaded(activeView);
+  }
+}
+
+async function ensureVisibleHistoriesLoaded(viewName) {
+  if (!v85Cloud?.isAuthenticated()) return;
+  let stocks = [];
+  if (viewName === "plans") {
+    const ids = new Set(state.plans.map((plan) => plan.stockId));
+    stocks = state.stocks.filter((stock) => ids.has(stock.id) || stock.workflowStatus === "holding");
+  } else if (viewName === "reports") {
+    stocks = state.stocks.filter((stock) => stock.active !== false);
+  } else {
+    stocks = dashboardFilteredStocks().slice(0, 12);
+  }
+  const missingIds = stocks
+    .filter((stock) => {
+      const count = state.prices.filter((price) => price.stockId === stock.id).length;
+      return count < Math.min(Number(stock.marketSummary?.historyCount || 5), 5);
+    })
+    .map((stock) => stock.id);
+  if (missingIds.length) {
+    const prices = await v85Cloud.loadHistories(missingIds).catch(() => []);
+    if (prices.length) {
+      const missingSet = new Set(missingIds);
+      state.prices = state.prices.filter((price) => !missingSet.has(price.stockId)).concat(prices.map(normalizePrice));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+  }
+  renderActiveView();
+}
+
+async function ensureStockHistoryLoaded(stockId) {
+  const existingCount = state.prices.filter((price) => price.stockId === stockId).length;
+  const expectedCount = Number(
+    state.stocks.find((stock) => stock.id === stockId)?.marketSummary?.historyCount || 0
+  );
+  if (existingCount >= Math.min(expectedCount || 5, 5)) return existingCount;
+  if (!v85Cloud?.isAuthenticated()) return existingCount;
+  if (!v85HistoryLoads.has(stockId)) {
+    v85HistoryLoads.set(
+      stockId,
+      v85Cloud
+        .loadHistory(stockId)
+        .then((prices) => {
+          state.prices = state.prices.filter((price) => price.stockId !== stockId).concat(prices.map(normalizePrice));
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+          return prices.length;
+        })
+        .catch(() => existingCount)
+        .finally(() => v85HistoryLoads.delete(stockId))
+    );
+  }
+  return v85HistoryLoads.get(stockId);
 }
 
 function setPlanSection(sectionName) {
@@ -1408,7 +1652,20 @@ function completeHistoryCount(stockId) {
 async function prepareStockSuggestion(stock) {
   const current = state.stocks.find((item) => item.id === stock.id && item.active !== false);
   if (!current) return;
-  const historyCount = completeHistoryCount(current.id);
+  let historyCount = completeHistoryCount(current.id);
+  if (historyCount < 5) {
+    els.addStockBtn.textContent = "读取历史";
+    if (v85Cloud?.isAuthenticated()) {
+      try {
+        await v85Cloud.saveState(currentStateSnapshot(), { includeHistory: true });
+        await v85Cloud.refreshStock(current.id);
+      } catch {
+        // The scheduled server job remains the fallback when the Edge Function is unavailable.
+      }
+    }
+    await ensureStockHistoryLoaded(current.id);
+    historyCount = completeHistoryCount(current.id);
+  }
   if (!normalizeStrategy(current.strategy) && historyCount >= 5) {
     current.strategy = recommendedStrategyFor(current);
   }
@@ -1418,10 +1675,10 @@ async function prepareStockSuggestion(stock) {
 
   setView("plans");
   showPlanEditor(current.id);
-  if (normalizeStrategy(current.strategy) && historyCount >= 5) applySuggestedPlan(false);
+  if (normalizeStrategy(current.strategy) && historyCount >= 5) await applySuggestedPlan(false);
 
   if (historyCount < 5) {
-    showToast(`${current.name}已上传，服务器将在30分钟内补齐日线`, 4200);
+    showToast(`${current.name}已上传，服务器正在补齐日线；稍后可重新生成建议`, 4200);
   } else {
     showToast(`${current.name}已有${historyCount}日日线，建议已生成待确认`, 3600);
   }
@@ -1502,6 +1759,7 @@ function buildReportContent(title, date, period) {
     "",
     "【市场概览】",
     `关注 ${model.rows.length} 只｜上涨 ${model.upCount}｜下跌 ${model.downCount}｜平盘 ${model.flatCount}｜平均 ${formatPct(model.average)}`,
+    `环境判断：${reportMarketContext(model).regime}｜上涨占比 ${formatNumber(reportMarketContext(model).positiveRatio)}%`,
     `最热概念：${model.hotConcept ? `${model.hotConcept.tag}（${model.hotConcept.count}只）` : "暂无"}`,
     "",
     "【强弱表现】",
@@ -1770,6 +2028,8 @@ function riskSuggestionFor(stock) {
   const latest = history.at(-1);
 
   if (!latest || history.length < 5) {
+    const summaryRisk = stock?.marketSummary?.risk;
+    if (summaryRisk?.label) return summaryRisk;
     return {
       tone: "muted",
       label: "数据积累中",
@@ -1868,10 +2128,20 @@ function dashboardFilteredStocks() {
 }
 
 function sparklineForStock(stockId) {
-  const history = state.prices
+  let history = state.prices
     .filter((price) => price.stockId === stockId && Number.isFinite(Number(price.close)) && Number(price.close) > 0)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(-20);
+
+  if (!history.length) {
+    const stock = state.stocks.find((item) => item.id === stockId);
+    const values = Array.isArray(stock?.marketSummary?.sparkline) ? stock.marketSummary.sparkline : [];
+    history = values.map((close, index) => ({
+      stockId,
+      date: String(index).padStart(2, "0"),
+      close
+    }));
+  }
 
   if (!history.length) return '<span class="sparkline-empty">暂无数据</span>';
 
@@ -2540,7 +2810,7 @@ function updatePlanSuggestionPrompt() {
     `${stock.name}当前有 ${historyCount} 个交易日记录；点击“生成建议”后只会填入表单，不会自动交易。`;
 }
 
-function applySuggestedPlan(showMessage = true) {
+async function applySuggestedPlan(showMessage = true) {
   const stock = state.stocks.find((item) => item.id === els.planStock.value);
   const strategy = normalizeStrategy(els.planStrategy.value);
   if (!stock) {
@@ -2550,6 +2820,13 @@ function applySuggestedPlan(showMessage = true) {
   if (!strategy) {
     showToast("请先选择入场策略");
     return;
+  }
+
+  if (completeHistoryCount(stock.id) < 5) {
+    els.suggestPlanBtn.disabled = true;
+    els.planSuggestionResult.textContent = "正在按需读取近期日线…";
+    await ensureStockHistoryLoaded(stock.id);
+    els.suggestPlanBtn.disabled = false;
   }
 
   const settings = normalizeRiskSettings({
@@ -2585,7 +2862,7 @@ function applySuggestedPlan(showMessage = true) {
       ${escapeHtml(suggestion.confidenceLabel)}
     </strong>
     <span>买入 ${formatNumber(suggestion.entryLow)}–${formatNumber(suggestion.entryHigh)}，失效 ${formatNumber(suggestion.invalidation)}，目标 ${formatNumber(suggestion.target1)} / ${formatNumber(suggestion.target2)}，${escapeHtml(positionText)}。</span>
-    <small>${escapeHtml(suggestion.basis)}</small>
+    <small>${escapeHtml(suggestion.basis)} · 策略引擎 ${suggestion.strategyVersion}</small>
   `;
   if (showMessage) showToast("建议参数已填入，请确认后保存");
 }
@@ -2693,9 +2970,11 @@ function suggestedPlanFor(stock, strategy, settings) {
     .reduce((sum, plan) => sum + Number(plan.positionPct || 0), 0);
   const totalCapacity = Math.max(0, settings.maxTotalPositionPct - otherPlanPosition);
   const riskSizedPosition = stopDistancePct > 0 ? (settings.riskPerTradePct / stopDistancePct) * 100 : null;
-  const positionPct = riskSizedPosition === null || totalCapacity <= 0
+  let positionPct = riskSizedPosition === null || totalCapacity <= 0
     ? null
     : Math.max(1, Math.min(riskSizedPosition, settings.maxPositionPct, totalCapacity));
+  const marketRegime = state.marketContext?.regime || "未知";
+  if (positionPct !== null && marketRegime === "偏弱") positionPct = Math.max(1, positionPct * 0.5);
   const confidence = ["event", "custom"].includes(strategy)
     ? "low"
     : completeBars.length >= 20 && history.length >= 30
@@ -2712,6 +2991,7 @@ function suggestedPlanFor(stock, strategy, settings) {
     ? `${history.length}日日线与 ATR14`
     : `${history.length}日收盘波动估算`;
   const noTradeConditions = defaultNoTradeConditions(strategy);
+  if (marketRegime === "偏弱" && !noTradeConditions.includes("market_weak")) noTradeConditions.push("market_weak");
   if (confidence === "low" && !noTradeConditions.includes("data_stale")) noTradeConditions.push("data_stale");
   if (positionPct === null && !noTradeConditions.includes("position_limit")) noTradeConditions.push("position_limit");
 
@@ -2725,7 +3005,8 @@ function suggestedPlanFor(stock, strategy, settings) {
     positionPct,
     confidence,
     confidenceLabel,
-    basis: `${strategyLabel(strategy)}；基于${dataBasis}；第一目标约 1.5R，第二目标约 2.5R。`,
+    strategyVersion: "v85.1",
+    basis: `${strategyLabel(strategy)}；基于${dataBasis}；市场环境${marketRegime}；第一目标约 1.5R，第二目标约 2.5R。`,
     entryLogic: defaultEntryLogicForStrategy(strategy),
     noTradeConditions,
     exitLogic: "invalidation",
@@ -2918,6 +3199,7 @@ function savePlanFromForm() {
     stockId: stock.id,
     date: activePlanDate(),
     strategy: els.planStrategy.value || stock.strategy,
+    strategyVersion: "v85.1",
     entryLow,
     entryHigh,
     invalidation,
@@ -3099,6 +3381,46 @@ function renderReviewMetrics() {
   els.reviewExecuted.textContent = executed;
   els.reviewSkipped.textContent = skipped;
   els.reviewDiscipline.textContent = discipline === null ? "-" : `${round(discipline, 0)}%`;
+  const pnl = calculatePortfolioPnl();
+  renderPnlMetric(els.reviewUnrealizedPnl, pnl.unrealized);
+  renderPnlMetric(els.reviewRealizedPnl, pnl.realized);
+}
+
+function calculatePortfolioPnl() {
+  const positions = new Map();
+  let realized = 0;
+  [...state.tradeLogs]
+    .filter((item) => ["buy", "sell"].includes(item.action) && Number(item.quantity) > 0 && Number(item.price) > 0)
+    .sort((a, b) => timestampValue(a.createdAt) - timestampValue(b.createdAt))
+    .forEach((item) => {
+      const current = positions.get(item.stockId) || { quantity: 0, cost: 0 };
+      const quantity = Number(item.quantity);
+      const price = Number(item.price);
+      if (item.action === "buy") {
+        current.cost += quantity * price;
+        current.quantity += quantity;
+      } else {
+        const sold = Math.min(quantity, current.quantity);
+        const averageCost = current.quantity > 0 ? current.cost / current.quantity : 0;
+        realized += sold * (price - averageCost);
+        current.quantity -= sold;
+        current.cost = Math.max(0, current.cost - sold * averageCost);
+      }
+      positions.set(item.stockId, current);
+    });
+  let unrealized = 0;
+  positions.forEach((position, stockId) => {
+    if (position.quantity <= 0) return;
+    const latest = latestPrice(stockId);
+    if (latest) unrealized += position.quantity * Number(latest.close) - position.cost;
+  });
+  return { realized: round(realized, 2), unrealized: round(unrealized, 2), positions };
+}
+
+function renderPnlMetric(element, value) {
+  if (!element) return;
+  element.textContent = `${value > 0 ? "+" : ""}${formatNumber(value)}`;
+  element.className = value > 0 ? "positive" : value < 0 ? "negative" : "";
 }
 
 function renderTradeLogs() {
@@ -3235,6 +3557,7 @@ function renderLatestDailyReport(report) {
         <div><span>平均涨幅</span><strong class="${reportChangeClass(model.average)}">${formatPct(model.average)}</strong></div>
         <div><span>平盘</span><strong>${model.flatCount}</strong></div>
         <div><span>最热概念</span><strong>${model.hotConcept ? `${escapeHtml(model.hotConcept.tag)} · ${model.hotConcept.count}` : "-"}</strong></div>
+        <div><span>市场环境</span><strong>${escapeHtml(reportMarketContext(model).regime)}</strong></div>
       </div>
 
       <section class="report-block">
@@ -3276,9 +3599,21 @@ function renderLatestDailyReport(report) {
             ? `${model.insufficientCount}只股票历史记录不足5个交易日，仅统计当日表现。`
             : "全部关注股票均已有至少5个交易日记录。"
         }
+        <span>策略引擎 v85.1 · 仅作复盘辅助，不构成交易指令</span>
       </footer>
     </article>
   `;
+}
+
+function reportMarketContext(model) {
+  if (state.marketContext?.regime) return state.marketContext;
+  const positiveRatio = model.rows.length ? round((model.upCount / model.rows.length) * 100, 1) : 0;
+  const regime = model.average >= 1 && positiveRatio >= 60
+    ? "偏强"
+    : model.average <= -1 && positiveRatio <= 40
+      ? "偏弱"
+      : "震荡";
+  return { regime, positiveRatio, averageChangePct: model.average, sampleSize: model.rows.length };
 }
 
 function renderReportMoverGroup(title, rows, tone) {
@@ -3367,9 +3702,11 @@ function reportChangeClass(value) {
 }
 
 function latestPrice(stockId) {
-  return state.prices
+  const local = state.prices
     .filter((price) => price.stockId === stockId)
     .sort((a, b) => b.date.localeCompare(a.date))[0];
+  if (local) return local;
+  return state.stocks.find((stock) => stock.id === stockId)?.marketSummary?.latest || null;
 }
 
 function priceRange(stockId, period) {
@@ -3385,7 +3722,10 @@ function priceRange(stockId, period) {
 
 function periodReturn(stockId, period) {
   const range = priceRange(stockId, period);
-  if (range.length < 2) return null;
+  if (range.length < 2) {
+    const returns = state.stocks.find((stock) => stock.id === stockId)?.marketSummary?.returns;
+    return period === "weekly" ? returns?.weekly ?? null : returns?.monthly ?? null;
+  }
   const first = range[0].close;
   const last = range[range.length - 1].close;
   return round(((last - first) / first) * 100, 2);
@@ -3395,7 +3735,9 @@ function sinceAddedReturn(stockId, addedAt) {
   const prices = state.prices
     .filter((price) => price.stockId === stockId && price.date >= addedAt)
     .sort((a, b) => a.date.localeCompare(b.date));
-  if (prices.length < 2) return null;
+  if (prices.length < 2) {
+    return state.stocks.find((stock) => stock.id === stockId)?.marketSummary?.returns?.sinceAdded ?? null;
+  }
   return round(((prices.at(-1).close - prices[0].close) / prices[0].close) * 100, 2);
 }
 

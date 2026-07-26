@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f7f8fa" />
     <title>Market Radar</title>
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./styles.css?v=84.0" />
+    <link rel="stylesheet" href="./styles.css?v=85.0" />
   </head>
   <body>
     <div class="app-shell">
@@ -132,10 +132,24 @@
           <div class="split-grid stock-data-tools">
             <section class="panel wide-panel">
               <div class="panel-head">
-                <h2>云端同步</h2>
+                <div>
+                  <h2>云端同步 V85</h2>
+                  <span class="panel-subtitle">账户隔离、增量保存、删除不复活</span>
+                </div>
                 <span class="status-pill" id="supabaseStatus">未连接</span>
               </div>
               <div class="cloud-sync-form">
+                <div class="v85-account-panel">
+                  <label>
+                    <span>登录邮箱</span>
+                    <input id="v85AuthEmail" type="email" autocomplete="email" placeholder="用于手机和电脑登录同一账户" />
+                  </label>
+                  <div class="button-row">
+                    <button class="primary-button" id="v85SendLinkBtn" type="button">发送登录邮件</button>
+                    <button class="ghost-button" id="v85SignOutBtn" type="button" hidden>退出登录</button>
+                  </div>
+                  <p class="v85-account-status" id="v85AccountStatus">V85 数据库尚未启用，当前继续使用本机数据。</p>
+                </div>
                 <label>
                   <span>Supabase Project URL</span>
                   <input id="supabaseUrl" autocomplete="off" placeholder="https://xxxx.supabase.co" />
@@ -148,6 +162,7 @@
                   <button class="primary-button" id="saveSupabaseBtn">保存并上传</button>
                   <button class="ghost-button" id="pullSupabaseBtn">从云端读取</button>
                   <button class="ghost-button" id="replaceFromCloudBtn">以云端为准</button>
+                  <button class="ghost-button" id="v85MigrateBtn" type="button" hidden>迁移 V84 数据</button>
                 </div>
               </div>
             </section>
@@ -549,6 +564,14 @@
                 <span>计划执行率</span>
                 <strong id="reviewDiscipline">-</strong>
               </article>
+              <article class="metric-card">
+                <span>持仓浮动盈亏</span>
+                <strong id="reviewUnrealizedPnl">-</strong>
+              </article>
+              <article class="metric-card">
+                <span>已实现盈亏</span>
+                <strong id="reviewRealizedPnl">-</strong>
+              </article>
             </section>
 
             <section class="panel wide-panel snapshot-panel">
@@ -565,6 +588,7 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=84.3"></script>
+    <script src="./v85-cloud.js?v=85.0"></script>
+    <script src="./app.js?v=85.0"></script>
   </body>
 </html>

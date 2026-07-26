@@ -11,6 +11,7 @@ without dependency installation.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import datetime as dt
 import html
@@ -24,6 +25,8 @@ import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+
+import v85_entities
 
 
 EMPTY_STATE = {"stocks": [], "prices": [], "news": [], "concepts": [], "reports": []}
@@ -45,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--history-only", action="store_true", help="Only backfill missing daily history in Supabase.")
     parser.add_argument("--supabase-url", help="Optional Supabase project URL.")
     parser.add_argument("--supabase-key", help="Optional Supabase anon or service role key.")
+    parser.add_argument("--supabase-owner-id", help="Authenticated V85 owner UUID. Enables radar_entities storage.")
     parser.add_argument("--supabase-row-id", default="primary-v2", help="Row id in app_state table.")
     parser.add_argument("--dry-run", action="store_true", help="Print summary without writing state.")
     return parser.parse_args()
@@ -61,7 +65,7 @@ def main() -> int:
         return 0
 
     state = load_state(state_path)
-    cloud_state = pull_supabase_state(args.supabase_url, args.supabase_key, args.supabase_row_id)
+    cloud_state = pull_cloud_state(args)
     if args.history_only and not cloud_state:
         print("history backfill requires a readable Supabase state", file=sys.stderr)
         return 1
@@ -76,26 +80,32 @@ def main() -> int:
     quote_results = []
     news_results = []
 
-    for stock in active_stocks:
+    def fetch_payload(stock: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any] | None, list[dict[str, str]]]:
+        history = []
         if not args.offline_demo and history_needs_backfill(state, stock["id"], args.history_days):
-            history = fetch_tencent_history(stock, args.history_days)
-            for bar in history:
-                upsert_price(state, stock["id"], bar)
-            if history:
-                print(f"history backfilled: {stock['market']}{stock['code']} {len(history)} bars")
+            history = fetch_history_with_retry(stock, args.history_days)
+        quote = demo_quote(stock, trade_date, state) if args.offline_demo else fetch_quote_with_retry(stock)
+        stock_news = demo_news(stock, trade_date) if args.offline_demo else fetch_public_news(stock, args.news_limit)
+        return stock, history, quote, stock_news
 
-        quote = demo_quote(stock, trade_date, state) if args.offline_demo else fetch_sina_quote(stock)
+    worker_count = min(8, max(1, len(active_stocks)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        payloads = list(executor.map(fetch_payload, active_stocks))
+
+    for stock, history, quote, stock_news in payloads:
+        for bar in history:
+            upsert_price(state, stock["id"], bar)
+        if history:
+            print(f"history backfilled: {stock['market']}{stock['code']} {len(history)} bars")
         if quote:
             upsert_price(state, stock["id"], {"date": trade_date.isoformat(), **quote})
             quote_results.append((stock["name"], quote["close"], quote["changePct"]))
         else:
             print(f"quote unavailable: {stock['market']}{stock['code']} {stock['name']}")
 
-        stock_news = demo_news(stock, trade_date) if args.offline_demo else fetch_public_news(stock, args.news_limit)
         for item in stock_news[: args.news_limit]:
             upsert_news(state, stock, trade_date.isoformat(), item)
         news_results.extend((stock["name"], item["title"]) for item in stock_news[: args.news_limit])
-        time.sleep(0.4 if not args.offline_demo else 0)
 
     prune_price_history(state, max(20, args.history_days))
     sync_concept_snapshot(state, trade_date)
@@ -107,7 +117,7 @@ def main() -> int:
 
     save_state(state_path, state)
     if args.supabase_url and args.supabase_key:
-        push_supabase_state(args.supabase_url, args.supabase_key, args.supabase_row_id, state)
+        push_cloud_state(args, state)
     print_summary(quote_results, news_results, state)
     return 0
 
@@ -128,20 +138,21 @@ def run_history_backfill(
         return 0
 
     fetched_by_identity: dict[tuple[str, str], list[dict[str, float | str]]] = {}
-    for stock in targets:
-        bars = fetch_tencent_history(stock, args.history_days)
+    worker_count = min(8, max(1, len(targets)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        fetched = list(executor.map(lambda stock: fetch_history_with_retry(stock, args.history_days), targets))
+    for stock, bars in zip(targets, fetched):
         if bars:
             fetched_by_identity[(stock["market"], stock["code"])] = bars
             print(f"history fetched: {stock['market']}{stock['code']} {len(bars)} bars")
         else:
             print(f"history unavailable: {stock['market']}{stock['code']} {stock['name']}")
-        time.sleep(0.15)
 
     if not fetched_by_identity:
         print("no missing history could be fetched", file=sys.stderr)
         return 1
 
-    latest_cloud = pull_supabase_state(args.supabase_url, args.supabase_key, args.supabase_row_id)
+    latest_cloud = pull_cloud_state(args)
     if not latest_cloud:
         print("latest Supabase state could not be reloaded", file=sys.stderr)
         return 1
@@ -173,7 +184,7 @@ def run_history_backfill(
         return 0
 
     save_state(state_path, latest_cloud)
-    if not push_supabase_state(args.supabase_url, args.supabase_key, args.supabase_row_id, latest_cloud):
+    if not push_cloud_state(args, latest_cloud):
         return 1
     print(
         f"history backfill complete: targets={len(targets)}, fetched={len(fetched_by_identity)}, "
@@ -237,6 +248,31 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
         json.dump(normalize_state(state), file, ensure_ascii=False, indent=2)
         file.write("\n")
     temp_path.replace(path)
+
+
+def pull_cloud_state(args: argparse.Namespace) -> dict[str, Any] | None:
+    if not args.supabase_url or not args.supabase_key:
+        return None
+    if args.supabase_owner_id:
+        state = v85_entities.pull_state(args.supabase_url, args.supabase_key, args.supabase_owner_id)
+        if state:
+            print("V85 entity state loaded")
+        return normalize_state(state) if state else None
+    return pull_supabase_state(args.supabase_url, args.supabase_key, args.supabase_row_id)
+
+
+def push_cloud_state(args: argparse.Namespace, state: dict[str, Any]) -> bool:
+    if not args.supabase_url or not args.supabase_key:
+        return False
+    if args.supabase_owner_id:
+        touch_sync_meta(state, "github-actions-v85")
+        return v85_entities.push_computed_state(
+            args.supabase_url,
+            args.supabase_key,
+            args.supabase_owner_id,
+            normalize_state(state),
+        )
+    return push_supabase_state(args.supabase_url, args.supabase_key, args.supabase_row_id, state)
 
 
 def pull_supabase_state(url: str | None, key: str | None, row_id: str) -> dict[str, Any] | None:
@@ -363,6 +399,28 @@ def normalize_concepts(value: Any) -> list[str]:
             seen.add(key)
             concepts.append(text)
     return concepts[:12]
+
+
+def fetch_quote_with_retry(stock: dict[str, Any], attempts: int = 3) -> dict[str, float] | None:
+    for attempt in range(attempts):
+        quote = fetch_sina_quote(stock)
+        if quote:
+            return quote
+        time.sleep(0.4 * (attempt + 1))
+    return None
+
+
+def fetch_history_with_retry(
+    stock: dict[str, Any],
+    history_days: int,
+    attempts: int = 3,
+) -> list[dict[str, float | str]]:
+    for attempt in range(attempts):
+        bars = fetch_tencent_history(stock, history_days)
+        if bars:
+            return bars
+        time.sleep(0.5 * (attempt + 1))
+    return []
 
 
 def fetch_sina_quote(stock: dict[str, Any]) -> dict[str, float] | None:

@@ -1,9 +1,10 @@
-const CACHE_NAME = "stock-hotspot-mvp-v84-3";
+const CACHE_NAME = "stock-hotspot-mvp-v85-0";
 const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css?v=84.0",
-  "./app.js?v=84.3",
+  "./styles.css?v=85.0",
+  "./v85-cloud.js?v=85.0",
+  "./app.js?v=85.0",
   "./manifest.webmanifest",
   "./assets/icon.svg"
 ];
@@ -28,7 +29,18 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   if (event.request.mode === "navigate") {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match("./index.html").then((cached) => cached || caches.match("./")))
+      caches.match("./index.html").then((cached) => {
+        const fresh = fetch(event.request)
+          .then((response) => {
+            if (response.ok) {
+              const copy = response.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", copy));
+            }
+            return response;
+          })
+          .catch(() => cached || caches.match("./"));
+        return cached || fresh;
+      })
     );
     return;
   }

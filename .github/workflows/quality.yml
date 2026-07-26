@@ -1,0 +1,32 @@
+name: V85 quality checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check JavaScript syntax
+        run: |
+          node --check app.js
+          node --check v85-cloud.js
+          node --check service-worker.js
+      - name: Run Python tests
+        run: python -m unittest discover -s tests -v
+      - name: Verify version references
+        run: |
+          grep -q 'v85-cloud.js?v=85.0' index.html
+          grep -q 'app.js?v=85.0' index.html
+          grep -q 'stock-hotspot-mvp-v85' service-worker.js

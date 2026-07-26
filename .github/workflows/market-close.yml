@@ -19,6 +19,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: market-radar-data-writer
+  cancel-in-progress: false
+
 jobs:
   market-close:
     runs-on: ubuntu-latest
@@ -44,6 +48,9 @@ jobs:
           fi
           if [ -n "${{ secrets.SUPABASE_URL }}" ] && [ -n "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" ]; then
             args+=(--supabase-url "${{ secrets.SUPABASE_URL }}" --supabase-key "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}")
+          fi
+          if [ -n "${{ secrets.SUPABASE_OWNER_ID }}" ]; then
+            args+=(--supabase-owner-id "${{ secrets.SUPABASE_OWNER_ID }}")
           fi
           python scripts/market_close_job.py "${args[@]}"
 

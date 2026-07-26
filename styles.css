@@ -948,6 +948,40 @@ td:nth-child(9) {
   align-items: end;
 }
 
+.v85-account-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 14px;
+  border: 1px solid #d8e1ea;
+  background: #f7fafc;
+  border-radius: 6px;
+}
+
+.v85-account-status {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #5f6b7a;
+  font-size: 13px;
+}
+
+.report-data-note span {
+  display: block;
+  margin-top: 6px;
+}
+
+@media (max-width: 680px) {
+  .v85-account-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .v85-account-panel .button-row {
+    justify-content: flex-start;
+  }
+}
+
 .stock-card {
   display: grid;
   gap: 10px;

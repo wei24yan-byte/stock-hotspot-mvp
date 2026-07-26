@@ -2,12 +2,16 @@ name: History backfill
 
 on:
   schedule:
-    # Every 30 minutes from 08:00 through 00:59 China Standard Time.
-    - cron: "7,37 0-16 * * *"
+    # Every 10 minutes while A-share users are typically active.
+    - cron: "3,13,23,33,43,53 0-16 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: market-radar-data-writer
+  cancel-in-progress: false
 
 jobs:
   history-backfill:
@@ -25,13 +29,17 @@ jobs:
 
       - name: Backfill missing daily history
         env:
-          SUPABASE_URL: "https://ctbvxztqhosjoswiainz.supabase.co"
-          SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0YnZ4enRxaG9zam9zd2lhaW56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NDY3OTUsImV4cCI6MjA5ODIyMjc5NX0.3aECjSBDCoAuK14q_Hlcqv7wiHeFuppJQ8phRCwnsCo"
+          SUPABASE_URL: "${{ secrets.SUPABASE_URL }}"
+          SUPABASE_SERVICE_ROLE_KEY: "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"
+          SUPABASE_OWNER_ID: "${{ secrets.SUPABASE_OWNER_ID }}"
         run: |
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
+          test -n "$SUPABASE_OWNER_ID"
           python scripts/market_close_job.py \
             --state data/state.json \
             --history-only \
             --history-days 60 \
             --supabase-url "$SUPABASE_URL" \
-            --supabase-key "$SUPABASE_ANON_KEY" \
-            --supabase-row-id primary-v2
+            --supabase-key "$SUPABASE_SERVICE_ROLE_KEY" \
+            --supabase-owner-id "$SUPABASE_OWNER_ID"
